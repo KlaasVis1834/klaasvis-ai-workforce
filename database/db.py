@@ -29,6 +29,7 @@ class Database:
                     received_at TEXT,
                     message_id TEXT,
                     internet_message_id TEXT,
+                    conversation_id TEXT,
                     source_hash TEXT,
                     import_batch_id TEXT,
                     sender TEXT,
@@ -37,6 +38,7 @@ class Database:
                     body TEXT,
                     has_attachments INTEGER,
                     attachment_names TEXT,
+                    attachment_metadata TEXT,
                     category TEXT,
                     confidence REAL,
                     priority TEXT,
@@ -80,8 +82,10 @@ class Database:
             "received_at": "ALTER TABLE mail_analyses ADD COLUMN received_at TEXT",
             "message_id": "ALTER TABLE mail_analyses ADD COLUMN message_id TEXT",
             "internet_message_id": "ALTER TABLE mail_analyses ADD COLUMN internet_message_id TEXT",
+            "conversation_id": "ALTER TABLE mail_analyses ADD COLUMN conversation_id TEXT",
             "source_hash": "ALTER TABLE mail_analyses ADD COLUMN source_hash TEXT",
             "import_batch_id": "ALTER TABLE mail_analyses ADD COLUMN import_batch_id TEXT",
+            "attachment_metadata": "ALTER TABLE mail_analyses ADD COLUMN attachment_metadata TEXT",
         }
         for column, statement in migrations.items():
             if column not in existing_columns:
@@ -116,14 +120,14 @@ class Database:
             cursor = connection.execute(
                 """
                 INSERT INTO mail_analyses (
-                    created_at, source, received_at, message_id, internet_message_id,
+                    created_at, source, received_at, message_id, internet_message_id, conversation_id,
                     source_hash, import_batch_id, sender, recipient, subject, body, has_attachments,
-                    attachment_names, category, confidence, priority, sender_type,
+                    attachment_names, attachment_metadata, category, confidence, priority, sender_type,
                     insurer, customer_name, relation_number, policy_number,
                     claim_number, license_plate, amount, summary, suggested_action,
                     next_agent, human_review_required, raw_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     datetime.now().isoformat(timespec="seconds"),
@@ -131,6 +135,7 @@ class Database:
                     mail_data.get("received_at"),
                     mail_data.get("message_id"),
                     mail_data.get("internet_message_id"),
+                    mail_data.get("conversation_id"),
                     source_hash,
                     mail_data.get("import_batch_id"),
                     mail_data.get("sender"),
@@ -139,6 +144,7 @@ class Database:
                     mail_data.get("body"),
                     int(bool(mail_data.get("has_attachments"))),
                     mail_data.get("attachment_names"),
+                    json.dumps(mail_data.get("attachment_metadata") or [], ensure_ascii=False),
                     analysis.get("categorie"),
                     analysis.get("vertrouwen"),
                     analysis.get("prioriteit"),
@@ -202,11 +208,14 @@ class Database:
 
     def dashboard_stats(self) -> dict[str, Any]:
         with self.connect() as connection:
-            total = connection.execute("SELECT COUNT(*) FROM mail_analyses").fetchone()[0]
+            total = connection.execute(
+                "SELECT COUNT(*) FROM mail_analyses WHERE source = 'Outlook'"
+            ).fetchone()[0]
             categories = connection.execute(
                 """
                 SELECT category, COUNT(*) AS count
                 FROM mail_analyses
+                WHERE source = 'Outlook'
                 GROUP BY category
                 ORDER BY count DESC, category ASC
                 """
@@ -216,6 +225,7 @@ class Database:
                 SELECT id, created_at, source, received_at, sender, subject, category,
                        confidence, human_review_required, import_batch_id
                 FROM mail_analyses
+                WHERE source = 'Outlook'
                 ORDER BY id DESC
                 LIMIT 10
                 """
@@ -224,6 +234,7 @@ class Database:
                 """
                 SELECT source, COUNT(*) AS count
                 FROM mail_analyses
+                WHERE source = 'Outlook'
                 GROUP BY source
                 ORDER BY count DESC, source ASC
                 """
@@ -255,6 +266,27 @@ class Database:
             "latest_imports": [dict(row) for row in latest_imports],
             "latest_errors": [dict(row) for row in latest_errors],
         }
+
+    def cleanup_non_production_mail_data(self) -> int:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM mail_analyses
+                WHERE source IS NULL OR source != 'Outlook'
+                """
+            )
+            return int(cursor.rowcount)
+
+    def cleanup_non_production_logs(self) -> int:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM agent_logs
+                WHERE message LIKE '%Handmatige mailtest%'
+                   OR message LIKE '%Handmatige import route%'
+                """
+            )
+            return int(cursor.rowcount)
 
     def latest_logs(self, limit: int = 20) -> list[dict[str, Any]]:
         with self.connect() as connection:

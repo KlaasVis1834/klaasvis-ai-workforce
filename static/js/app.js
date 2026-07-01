@@ -1,18 +1,9 @@
 document.addEventListener("DOMContentLoaded", () => {
-    const attachmentSelect = document.querySelector('select[name="has_attachments"]');
-    const attachmentInput = document.querySelector('input[name="attachment_names"]');
-
-    if (!attachmentSelect || !attachmentInput) {
+    const liveDashboard = document.querySelector(".dashboard-live");
+    if (!liveDashboard) {
         return;
     }
 
-    const syncAttachmentInput = () => {
-        attachmentInput.disabled = attachmentSelect.value !== "yes";
-        if (attachmentInput.disabled) {
-            attachmentInput.value = "";
-        }
-    };
-
-    attachmentSelect.addEventListener("change", syncAttachmentInput);
-    syncAttachmentInput();
+    const seconds = Number(liveDashboard.dataset.refreshSeconds || "15");
+    window.setInterval(() => window.location.reload(), seconds * 1000);
 });

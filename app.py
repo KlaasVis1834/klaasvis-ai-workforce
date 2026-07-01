@@ -4,7 +4,8 @@ import os
 import uuid
 from pathlib import Path
 
-from flask import Flask, flash, redirect, render_template, request, session, url_for
+from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
+from werkzeug.exceptions import HTTPException
 try:
     from dotenv import load_dotenv
 except ImportError:
@@ -13,7 +14,7 @@ except ImportError:
 
 from agents import MailIntakeAgent
 from database import Database
-from services import MicrosoftGraphService, OllamaService, TokenStore
+from services import MailboxMonitor, MicrosoftGraphService, OllamaService, TokenStore
 from services.microsoft_graph_service import create_pkce_pair
 
 
@@ -50,19 +51,12 @@ graph_service = MicrosoftGraphService(
 
 Path("logs").mkdir(exist_ok=True)
 database.log("Applicatie", "INFO", "Applicatie gestart")
-
-
-def future_agents() -> list[dict]:
-    return [
-        {"naam": "Document Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
-        {"naam": "Klant Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
-        {"naam": "DDI Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
-        {"naam": "ANVA Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
-        {"naam": "Schade Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
-        {"naam": "Polis Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
-        {"naam": "Communicatie Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
-        {"naam": "Compliance Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
-    ]
+removed_rows = database.cleanup_non_production_mail_data()
+if removed_rows:
+    database.log("Database", "INFO", "Niet-productie maildata verwijderd", str(removed_rows))
+removed_logs = database.cleanup_non_production_logs()
+if removed_logs:
+    database.log("Database", "INFO", "Niet-productie logs verwijderd", str(removed_logs))
 
 
 @app.context_processor
@@ -84,6 +78,8 @@ def dashboard():
         "dashboard.html",
         ollama_status="online" if ollama_online else "offline",
         database_status=database.status(),
+        outlook_status=graph_service.connection_status(),
+        monitor_status=mailbox_monitor.snapshot(),
         stats=stats,
         logs=database.latest_logs(10),
     )
@@ -94,50 +90,15 @@ def agents():
     return render_template(
         "agents.html",
         mail_agent=mail_agent.metadata(),
-        future_agents=future_agents(),
+        monitor_status=mailbox_monitor.snapshot(),
     )
 
 
 @app.route("/mail-test", methods=["GET", "POST"])
 def mail_test():
-    if request.method == "GET":
-        return render_template("mail_test.html")
-
-    mail_data = {
-        "sender": request.form.get("sender", "").strip(),
-        "recipient": request.form.get("recipient", "").strip(),
-        "subject": request.form.get("subject", "").strip(),
-        "body": request.form.get("body", "").strip(),
-        "has_attachments": request.form.get("has_attachments") == "yes",
-        "attachment_names": request.form.get("attachment_names", "").strip(),
-        "source": "Handmatig",
-    }
-
-    database.log("Mail Intake Agent", "INFO", "Nieuwe analyse gestart", mail_data.get("subject"))
-    analysis = mail_agent.run(mail_data)
-
-    try:
-        analysis_id = database.save_mail_analysis(mail_data, analysis)
-        if mail_agent.last_error:
-            database.log("Mail Intake Agent", "ERROR", "Analyse mislukt", mail_agent.last_error)
-            if "json" in mail_agent.last_error.lower():
-                database.log("Mail Intake Agent", "ERROR", "JSON parse fout", mail_agent.last_error)
-        else:
-            database.log("Mail Intake Agent", "INFO", "Analyse geslaagd", f"Analyse ID {analysis_id}")
-    except Exception as exc:
-        database.log("Database", "ERROR", "Database fout", str(exc))
-        flash("Analyse uitgevoerd, maar opslaan in de database is mislukt.", "error")
-        analysis_id = None
-
-    if analysis.get("categorie") == "ONBEKEND" and analysis.get("vertrouwen") == 0.0:
-        database.log("Mail Intake Agent", "WARNING", "Analyse fallback gebruikt")
-
-    return render_template(
-        "mail_result.html",
-        mail_data=mail_data,
-        analysis=analysis,
-        analysis_id=analysis_id,
-    )
+    database.log("Mail Agent", "INFO", "Handmatige mailtest route aangeroepen; automatische Outlook intake actief")
+    flash("De Mail Intake Agent verwerkt Outlook-mail automatisch. Handmatige invoer is uitgeschakeld.", "success")
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/mailbox")
@@ -145,6 +106,7 @@ def mailbox():
     return render_template(
         "mailbox.html",
         outlook_status=graph_service.connection_status(),
+        monitor_status=mailbox_monitor.snapshot(),
         latest_imports=database.dashboard_stats()["latest_imports"],
     )
 
@@ -188,6 +150,8 @@ def microsoft_callback():
     try:
         graph_service.exchange_code(code, code_verifier)
         database.log("Outlook", "INFO", "Outlook verbonden")
+        database.log("Outlook", "INFO", "OAuth OK")
+        mailbox_monitor.run_once()
         flash("Outlook is verbonden.", "success")
     except Exception as exc:
         database.log("Outlook", "ERROR", "Microsoft token ophalen mislukt", str(exc))
@@ -199,34 +163,24 @@ def microsoft_callback():
     return redirect(url_for("mailbox"))
 
 
-@app.route("/mailbox/import", methods=["POST"])
+@app.route("/mailbox/import", methods=["GET", "POST"])
 def import_mailbox():
-    mode = request.form.get("mode", "latest")
-    if mode not in {"latest", "unread", "attachments"}:
-        flash("Onbekende importkeuze.", "error")
-        return redirect(url_for("mailbox"))
-
-    try:
-        result = import_outlook_messages(mode)
-        flash(
-            f"Import afgerond: {result['imported']} geimporteerd, {result['duplicates']} duplicaten overgeslagen, {result['failed']} fouten.",
-            "success",
-        )
-    except Exception as exc:
-        database.log("Outlook", "ERROR", "Outlook import mislukt", str(exc))
-        flash(f"Outlook import mislukt: {exc}", "error")
+    database.log("Mail Agent", "INFO", "Handmatige import route aangeroepen; automatische monitor actief")
+    flash("De Mail Intake Agent scant Outlook automatisch elke 15 seconden.", "success")
     return redirect(url_for("mailbox"))
 
 
-def import_outlook_messages(mode: str) -> dict[str, int]:
+def import_outlook_messages(mode: str = "poll") -> dict[str, int]:
     import_batch_id = uuid.uuid4().hex
-    database.log("Outlook", "INFO", "Outlook import gestart", f"modus={mode}; batch={import_batch_id}")
+    database.log("Outlook", "INFO", "Mailbox scan gestart", f"modus={mode}; batch={import_batch_id}")
     messages = graph_service.fetch_messages(mode)
+    database.log("Outlook", "INFO", "Graph OK", f"{len(messages)} mails opgehaald")
     imported = 0
     duplicates = 0
     failed = 0
 
     for mail_data in messages:
+        database.log("Outlook", "INFO", "Mail opgehaald", mail_data.get("subject"))
         mail_data["import_batch_id"] = import_batch_id
         mail_data["source_hash"] = database.build_source_hash(mail_data)
         if database.is_duplicate_mail(mail_data):
@@ -234,7 +188,8 @@ def import_outlook_messages(mode: str) -> dict[str, int]:
             database.log("Outlook", "INFO", "Duplicaat overgeslagen", mail_data.get("subject"))
             continue
 
-        database.log("Mail Intake Agent", "INFO", "Nieuwe Outlook analyse gestart", mail_data.get("subject"))
+        database.log("Mail Intake Agent", "INFO", "Mail ontvangen", mail_data.get("subject"))
+        database.log("Mail Intake Agent", "INFO", "Ollama gestart", mail_data.get("internet_message_id"))
         analysis = mail_agent.run(mail_data)
         try:
             analysis_id = database.save_mail_analysis(mail_data, analysis)
@@ -244,7 +199,8 @@ def import_outlook_messages(mode: str) -> dict[str, int]:
                 if "json" in mail_agent.last_error.lower():
                     database.log("Mail Intake Agent", "ERROR", "JSON parse fout", mail_agent.last_error)
             else:
-                database.log("Mail Intake Agent", "INFO", "Outlook analyse geslaagd", f"Analyse ID {analysis_id}")
+                database.log("Mail Intake Agent", "INFO", "Analyse voltooid", f"Analyse ID {analysis_id}")
+                database.log("Database", "INFO", "Database opgeslagen", f"Analyse ID {analysis_id}")
         except Exception as exc:
             failed += 1
             database.log("Database", "ERROR", "Database fout", str(exc))
@@ -252,10 +208,37 @@ def import_outlook_messages(mode: str) -> dict[str, int]:
     database.log(
         "Outlook",
         "INFO",
-        "Outlook import afgerond",
+        "Mailbox scan afgerond",
         f"batch={import_batch_id}; geimporteerd={imported}; duplicaten={duplicates}; fouten={failed}",
     )
+    database.log("Dashboard", "INFO", "Dashboard bijgewerkt", f"nieuwe_mails={imported}")
     return {"imported": imported, "duplicates": duplicates, "failed": failed}
+
+
+def outlook_connected() -> bool:
+    status = graph_service.connection_status()
+    return bool(status.get("connected") and status.get("configured"))
+
+
+mailbox_monitor = MailboxMonitor(
+    scan_callback=import_outlook_messages,
+    connected_callback=outlook_connected,
+    log_callback=database.log,
+    interval_seconds=15,
+)
+mailbox_monitor.start()
+
+
+@app.route("/api/status")
+def api_status():
+    return jsonify(
+        {
+            "mail_agent": mail_agent.metadata(),
+            "outlook": graph_service.connection_status(),
+            "monitor": mailbox_monitor.snapshot(),
+            "stats": database.dashboard_stats(),
+        }
+    )
 
 
 @app.route("/logs")
@@ -270,9 +253,12 @@ def settings():
 
 @app.errorhandler(Exception)
 def handle_error(error):
-    database.log("Applicatie", "ERROR", "Analyse mislukt" if request.path == "/mail-test" else "Applicatiefout", str(error))
+    if isinstance(error, HTTPException):
+        database.log("Applicatie", "ERROR", f"HTTP {error.code}", str(error))
+        return render_template("error.html", error=error), error.code
+    database.log("Applicatie", "ERROR", "Applicatiefout", str(error))
     return render_template("error.html", error=error), 500
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    app.run(host="127.0.0.1", port=5000, debug=os.getenv("FLASK_DEBUG") == "1", use_reloader=False)

@@ -145,11 +145,16 @@ h2 {
 }
 
 .metric-grid,
-.agent-grid {
+.agent-grid,
+.status-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 14px;
     margin-bottom: 18px;
+}
+
+.status-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .metric,
@@ -444,6 +449,7 @@ button:disabled {
     }
 
     .metric-grid,
+    .status-grid,
     .agent-grid,
     .two-column,
     .result-grid,

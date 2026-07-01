@@ -30,21 +30,14 @@
     </article>
 
     <article class="panel">
-        <h2>Importeer e-mails</h2>
-        <div class="import-actions">
-            <form method="post" action="{{ url_for('import_mailbox') }}">
-                <input type="hidden" name="mode" value="latest">
-                <button type="submit" {{ "disabled" if not outlook_status.connected else "" }}>Importeer laatste 10 e-mails</button>
-            </form>
-            <form method="post" action="{{ url_for('import_mailbox') }}">
-                <input type="hidden" name="mode" value="unread">
-                <button type="submit" {{ "disabled" if not outlook_status.connected else "" }}>Importeer ongelezen e-mails</button>
-            </form>
-            <form method="post" action="{{ url_for('import_mailbox') }}">
-                <input type="hidden" name="mode" value="attachments">
-                <button type="submit" {{ "disabled" if not outlook_status.connected else "" }}>Importeer e-mails met bijlagen</button>
-            </form>
-        </div>
+        <h2>Automatische verwerking</h2>
+        <dl class="result-list">
+            <div><dt>Mail Agent</dt><dd>{{ "Online" if monitor_status.running else "Offline" }}</dd></div>
+            <div><dt>Scan interval</dt><dd>15 seconden</dd></div>
+            <div><dt>Laatste synchronisatie</dt><dd>{{ monitor_status.last_sync or "-" }}</dd></div>
+            <div><dt>Laatste mailbox scan</dt><dd>{{ monitor_status.last_scan or "-" }}</dd></div>
+            <div><dt>Nieuwe mails laatste scan</dt><dd>{{ monitor_status.new_mails }}</dd></div>
+        </dl>
     </article>
 </section>
 

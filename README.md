@@ -1,6 +1,6 @@
 # Klaas Vis AI Workforce v0.2
 
-Lokale basisversie van het Klaas Vis AI Command Center met een werkende Mail Intake Agent. Deze versie analyseert handmatig geplakte e-mails en echte Outlook-mails via Microsoft Graph met Ollama en slaat de resultaten op in SQLite.
+Lokale basisversie van het Klaas Vis AI Command Center met een werkende productiegerichte Mail Intake Agent. Deze versie leest echte Outlook-mails via Microsoft Graph, analyseert ze automatisch met lokale Ollama en slaat de resultaten op in SQLite.
 
 Deze versie bevat geen Activepieces-koppeling, ANVA-koppeling, DDI-koppeling, automatische e-mailverzending of definitieve acties. Outlook wordt alleen gelezen.
 
@@ -66,15 +66,6 @@ Open daarna:
 http://localhost:5000
 ```
 
-## Testmail analyseren
-
-1. Ga naar `http://localhost:5000/mail-test`.
-2. Vul afzender, ontvanger, onderwerp en e-mailtekst in.
-3. Geef aan of er bijlagen aanwezig zijn.
-4. Klik op `Analyseer e-mail`.
-
-De Mail Intake Agent toont daarna de classificatie, samenvatting, voorgestelde actie en volledige JSON-output. De analyse wordt opgeslagen in SQLite.
-
 ## Outlook koppelen
 
 Maak in Microsoft Entra ID een appregistratie voor deze lokale app.
@@ -105,9 +96,22 @@ Start daarna de app en open:
 http://localhost:5000/mailbox
 ```
 
-Klik op `Verbind Outlook`, log in via Microsoft en importeer daarna de laatste 10, ongelezen mails of mails met bijlagen.
+Klik op `Verbind Outlook` en log in via Microsoft. Na succesvolle OAuth-login start de Mail Intake Agent automatisch.
 
-De applicatie leest mails via Microsoft Graph, analyseert ze lokaal via Ollama en slaat de resultaten lokaal op. Mails worden niet verwijderd, verplaatst of beantwoord.
+De achtergrondservice scant de mailbox elke 15 seconden. Nieuwe Outlook-mails worden automatisch opgehaald, geanalyseerd en opgeslagen. Mails worden niet verwijderd, verplaatst of beantwoord.
+
+Geimporteerde velden:
+
+```text
+Subject
+Sender
+Recipients
+Received Date
+Body
+Attachments metadata
+ConversationId
+InternetMessageId
+```
 
 ## Projectstructuur
 
@@ -125,11 +129,25 @@ klaasvis-ai-workforce/
 └── logs/
 ```
 
+## Realtime dashboard
+
+Het dashboard toont alleen echte Outlook-mails, echte analyses, echte fouten en echte logs. De dashboardpagina ververst automatisch elke 15 seconden.
+
+Status bovenin:
+
+```text
+Mail Agent
+Outlook
+Laatste synchronisatie
+Aantal nieuwe mails
+Laatste mailbox scan
+```
+
 ## Logging
 
 De applicatie logt applicatiestart, Ollama-statuschecks, nieuwe analyses, geslaagde analyses, fallback-analyses en databasefouten in de tabel `agent_logs`.
 
-Outlook OAuth, imports, duplicaten en importfouten worden ook gelogd.
+Outlook OAuth, Graph-status, ontvangen mails, Ollama-start, voltooide analyses, database-opslag, dashboard-updates, duplicaten en importfouten worden ook gelogd.
 
 Logs zijn zichtbaar via:
 

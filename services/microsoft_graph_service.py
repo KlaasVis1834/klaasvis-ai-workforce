@@ -114,8 +114,8 @@ class MicrosoftGraphService:
     def get_profile(self) -> dict[str, Any]:
         return self._graph_get("/me")
 
-    def fetch_messages(self, mode: str) -> list[dict[str, Any]]:
-        top = 10 if mode == "latest" else 50
+    def fetch_messages(self, mode: str = "poll") -> list[dict[str, Any]]:
+        top = 25 if mode == "poll" else 10
         params = {
             "$top": str(top),
             "$orderby": "receivedDateTime desc",
@@ -123,6 +123,7 @@ class MicrosoftGraphService:
                 [
                     "id",
                     "internetMessageId",
+                    "conversationId",
                     "subject",
                     "sender",
                     "toRecipients",
@@ -139,11 +140,7 @@ class MicrosoftGraphService:
             headers={"Prefer": 'outlook.body-content-type="text"'},
         )
         messages = response.get("value", [])
-        if mode == "unread":
-            messages = [message for message in messages if not message.get("isRead")]
-        elif mode == "attachments":
-            messages = [message for message in messages if message.get("hasAttachments")]
-        return [self.normalize_message(message) for message in messages[:10]]
+        return [self.normalize_message(message) for message in messages[:top]]
 
     def normalize_message(self, message: dict[str, Any]) -> dict[str, Any]:
         attachments = self.fetch_attachment_metadata(message["id"]) if message.get("hasAttachments") else []
@@ -158,6 +155,7 @@ class MicrosoftGraphService:
             "source": "Outlook",
             "message_id": message.get("id"),
             "internet_message_id": message.get("internetMessageId"),
+            "conversation_id": message.get("conversationId"),
             "sender": sender.get("address") or sender.get("name") or "",
             "recipient": ", ".join(recipients),
             "subject": message.get("subject") or "",
