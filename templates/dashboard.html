@@ -46,19 +46,18 @@
     </article>
 
     <article class="panel">
-        <h2>Laatste logs</h2>
-        {% if logs %}
-            <div class="log-list compact">
-                {% for log in logs %}
+        <h2>Analyses per bron</h2>
+        {% if stats.sources %}
+            <div class="category-list">
+                {% for item in stats.sources %}
                     <div>
-                        <span class="log-level {{ log.level|lower }}">{{ log.level }}</span>
-                        <p>{{ log.message }}</p>
-                        <small>{{ log.created_at }} · {{ log.agent_name }}</small>
+                        <span>{{ item.source or "Onbekend" }}</span>
+                        <strong>{{ item.count }}</strong>
                     </div>
                 {% endfor %}
             </div>
         {% else %}
-            <p class="empty">Nog geen logs.</p>
+            <p class="empty">Nog geen bronnen beschikbaar.</p>
         {% endif %}
     </article>
 </section>
@@ -71,6 +70,8 @@
                 <thead>
                     <tr>
                         <th>Tijd</th>
+                        <th>Bron</th>
+                        <th>Ontvangen</th>
                         <th>Afzender</th>
                         <th>Onderwerp</th>
                         <th>Categorie</th>
@@ -82,6 +83,8 @@
                     {% for item in stats.latest_analyses %}
                         <tr>
                             <td>{{ item.created_at }}</td>
+                            <td>{{ item.source or "Handmatig" }}</td>
+                            <td>{{ item.received_at or "-" }}</td>
                             <td>{{ item.sender }}</td>
                             <td>{{ item.subject }}</td>
                             <td>{{ item.category }}</td>
@@ -93,7 +96,61 @@
             </table>
         </div>
     {% else %}
-        <p class="empty">Analyseer een testmail om hier resultaten te zien.</p>
+        <p class="empty">Importeer of analyseer een mail om hier resultaten te zien.</p>
+    {% endif %}
+</section>
+
+<section class="two-column">
+    <article class="panel">
+        <h2>Laatste Outlook imports</h2>
+        {% if stats.latest_imports %}
+            <div class="log-list compact">
+                {% for item in stats.latest_imports %}
+                    <div>
+                        <span class="model-pill">{{ item.category }}</span>
+                        <p>{{ item.subject }}</p>
+                        <small>{{ item.created_at }} - {{ item.sender }}</small>
+                    </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p class="empty">Nog geen Outlook imports.</p>
+        {% endif %}
+    </article>
+
+    <article class="panel">
+        <h2>Laatste fouten</h2>
+        {% if stats.latest_errors %}
+            <div class="log-list compact">
+                {% for item in stats.latest_errors %}
+                    <div>
+                        <span class="log-level error">ERROR</span>
+                        <p>{{ item.message }}</p>
+                        {% if item.details %}<code>{{ item.details }}</code>{% endif %}
+                        <small>{{ item.created_at }} - {{ item.agent_name }}</small>
+                    </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p class="empty">Geen recente fouten.</p>
+        {% endif %}
+    </article>
+</section>
+
+<section class="panel">
+    <h2>Laatste logs</h2>
+    {% if logs %}
+        <div class="log-list compact">
+            {% for log in logs %}
+                <div>
+                    <span class="log-level {{ log.level|lower }}">{{ log.level }}</span>
+                    <p>{{ log.message }}</p>
+                    <small>{{ log.created_at }} - {{ log.agent_name }}</small>
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty">Nog geen logs.</p>
     {% endif %}
 </section>
 {% endblock %}

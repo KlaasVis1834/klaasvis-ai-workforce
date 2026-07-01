@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Outlook Mailbox - Klaas Vis AI Workforce{% endblock %}
+{% block content %}
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Echte mail intake</p>
+        <h1>Outlook Mailbox</h1>
+    </div>
+    <span class="status {{ 'online' if outlook_status.connected else 'offline' }}">
+        {{ "Verbonden" if outlook_status.connected else "Niet verbonden" }}
+    </span>
+</section>
+
+<section class="two-column">
+    <article class="panel">
+        <h2>Outlook verbinding</h2>
+        <dl class="result-list">
+            <div><dt>Configuratie</dt><dd>{{ "Compleet" if outlook_status.configured else "Onvolledig" }}</dd></div>
+            <div><dt>Status</dt><dd>{{ "Verbonden" if outlook_status.connected else "Niet verbonden" }}</dd></div>
+            <div><dt>Account</dt><dd>
+                {% if outlook_status.user %}
+                    {{ outlook_status.user.display_name or outlook_status.user.mail }}<br>
+                    <small>{{ outlook_status.user.mail }}</small>
+                {% else %}
+                    -
+                {% endif %}
+            </dd></div>
+        </dl>
+        <a class="button" href="{{ url_for('microsoft_login') }}">Verbind Outlook</a>
+    </article>
+
+    <article class="panel">
+        <h2>Importeer e-mails</h2>
+        <div class="import-actions">
+            <form method="post" action="{{ url_for('import_mailbox') }}">
+                <input type="hidden" name="mode" value="latest">
+                <button type="submit" {{ "disabled" if not outlook_status.connected else "" }}>Importeer laatste 10 e-mails</button>
+            </form>
+            <form method="post" action="{{ url_for('import_mailbox') }}">
+                <input type="hidden" name="mode" value="unread">
+                <button type="submit" {{ "disabled" if not outlook_status.connected else "" }}>Importeer ongelezen e-mails</button>
+            </form>
+            <form method="post" action="{{ url_for('import_mailbox') }}">
+                <input type="hidden" name="mode" value="attachments">
+                <button type="submit" {{ "disabled" if not outlook_status.connected else "" }}>Importeer e-mails met bijlagen</button>
+            </form>
+        </div>
+    </article>
+</section>
+
+<section class="panel">
+    <h2>Laatste Outlook imports</h2>
+    {% if latest_imports %}
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Importtijd</th>
+                        <th>Ontvangen</th>
+                        <th>Afzender</th>
+                        <th>Onderwerp</th>
+                        <th>Categorie</th>
+                        <th>Vertrouwen</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in latest_imports %}
+                        <tr>
+                            <td>{{ item.created_at }}</td>
+                            <td>{{ item.received_at or "-" }}</td>
+                            <td>{{ item.sender }}</td>
+                            <td>{{ item.subject }}</td>
+                            <td>{{ item.category }}</td>
+                            <td>{{ "%.0f"|format((item.confidence or 0) * 100) }}%</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <p class="empty">Nog geen Outlook-mails geimporteerd.</p>
+    {% endif %}
+</section>
+{% endblock %}

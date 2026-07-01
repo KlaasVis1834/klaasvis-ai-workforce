@@ -13,6 +13,7 @@
     <article class="panel">
         <h2>Classificatie</h2>
         <dl class="result-list">
+            <div><dt>Bron</dt><dd>{{ mail_data.source or "Handmatig" }}</dd></div>
             <div><dt>Categorie</dt><dd>{{ analysis.categorie }}</dd></div>
             <div><dt>Vertrouwen</dt><dd>{{ "%.0f"|format((analysis.vertrouwen or 0) * 100) }}%</dd></div>
             <div><dt>Prioriteit</dt><dd>{{ analysis.prioriteit }}</dd></div>

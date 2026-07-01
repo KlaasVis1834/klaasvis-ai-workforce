@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,12 @@ class Database:
                 CREATE TABLE IF NOT EXISTS mail_analyses (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     created_at TEXT NOT NULL,
+                    source TEXT DEFAULT 'Handmatig',
+                    received_at TEXT,
+                    message_id TEXT,
+                    internet_message_id TEXT,
+                    source_hash TEXT,
+                    import_batch_id TEXT,
                     sender TEXT,
                     recipient TEXT,
                     subject TEXT,
@@ -49,6 +56,7 @@ class Database:
                 )
                 """
             )
+            self._migrate_mail_analyses(connection)
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS agent_logs (
@@ -62,6 +70,38 @@ class Database:
                 """
             )
 
+    def _migrate_mail_analyses(self, connection: sqlite3.Connection) -> None:
+        existing_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(mail_analyses)").fetchall()
+        }
+        migrations = {
+            "source": "ALTER TABLE mail_analyses ADD COLUMN source TEXT DEFAULT 'Handmatig'",
+            "received_at": "ALTER TABLE mail_analyses ADD COLUMN received_at TEXT",
+            "message_id": "ALTER TABLE mail_analyses ADD COLUMN message_id TEXT",
+            "internet_message_id": "ALTER TABLE mail_analyses ADD COLUMN internet_message_id TEXT",
+            "source_hash": "ALTER TABLE mail_analyses ADD COLUMN source_hash TEXT",
+            "import_batch_id": "ALTER TABLE mail_analyses ADD COLUMN import_batch_id TEXT",
+        }
+        for column, statement in migrations.items():
+            if column not in existing_columns:
+                connection.execute(statement)
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_analyses_message_id
+            ON mail_analyses(message_id)
+            WHERE message_id IS NOT NULL AND message_id != ''
+            """
+        )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_analyses_internet_message_id
+            ON mail_analyses(internet_message_id)
+            WHERE internet_message_id IS NOT NULL AND internet_message_id != ''
+            """
+        )
+        connection.execute("DROP INDEX IF EXISTS idx_mail_analyses_source_hash")
+
     def status(self) -> str:
         try:
             with self.connect() as connection:
@@ -71,20 +111,28 @@ class Database:
             return "offline"
 
     def save_mail_analysis(self, mail_data: dict[str, Any], analysis: dict[str, Any]) -> int:
+        source_hash = mail_data.get("source_hash") or self.build_source_hash(mail_data)
         with self.connect() as connection:
             cursor = connection.execute(
                 """
                 INSERT INTO mail_analyses (
-                    created_at, sender, recipient, subject, body, has_attachments,
+                    created_at, source, received_at, message_id, internet_message_id,
+                    source_hash, import_batch_id, sender, recipient, subject, body, has_attachments,
                     attachment_names, category, confidence, priority, sender_type,
                     insurer, customer_name, relation_number, policy_number,
                     claim_number, license_plate, amount, summary, suggested_action,
                     next_agent, human_review_required, raw_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     datetime.now().isoformat(timespec="seconds"),
+                    mail_data.get("source", "Handmatig"),
+                    mail_data.get("received_at"),
+                    mail_data.get("message_id"),
+                    mail_data.get("internet_message_id"),
+                    source_hash,
+                    mail_data.get("import_batch_id"),
                     mail_data.get("sender"),
                     mail_data.get("recipient"),
                     mail_data.get("subject"),
@@ -111,6 +159,37 @@ class Database:
             )
             return int(cursor.lastrowid)
 
+    def is_duplicate_mail(self, mail_data: dict[str, Any]) -> bool:
+        source_hash = mail_data.get("source_hash") or self.build_source_hash(mail_data)
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id
+                FROM mail_analyses
+                WHERE (message_id IS NOT NULL AND message_id != '' AND message_id = ?)
+                   OR (internet_message_id IS NOT NULL AND internet_message_id != '' AND internet_message_id = ?)
+                   OR (source_hash IS NOT NULL AND source_hash != '' AND source_hash = ?)
+                LIMIT 1
+                """,
+                (
+                    mail_data.get("message_id"),
+                    mail_data.get("internet_message_id"),
+                    source_hash,
+                ),
+            ).fetchone()
+        return row is not None
+
+    def build_source_hash(self, mail_data: dict[str, Any]) -> str:
+        hash_input = "|".join(
+            [
+                str(mail_data.get("sender") or ""),
+                str(mail_data.get("subject") or ""),
+                str(mail_data.get("received_at") or ""),
+                str(mail_data.get("body") or ""),
+            ]
+        )
+        return hashlib.sha256(hash_input.encode("utf-8")).hexdigest()
+
     def log(self, agent_name: str, level: str, message: str, details: str | None = None) -> None:
         with self.connect() as connection:
             connection.execute(
@@ -134,8 +213,36 @@ class Database:
             ).fetchall()
             latest = connection.execute(
                 """
-                SELECT id, created_at, sender, subject, category, confidence, human_review_required
+                SELECT id, created_at, source, received_at, sender, subject, category,
+                       confidence, human_review_required, import_batch_id
                 FROM mail_analyses
+                ORDER BY id DESC
+                LIMIT 10
+                """
+            ).fetchall()
+            sources = connection.execute(
+                """
+                SELECT source, COUNT(*) AS count
+                FROM mail_analyses
+                GROUP BY source
+                ORDER BY count DESC, source ASC
+                """
+            ).fetchall()
+            latest_imports = connection.execute(
+                """
+                SELECT id, created_at, source, received_at, sender, subject, category,
+                       confidence, import_batch_id
+                FROM mail_analyses
+                WHERE source = 'Outlook'
+                ORDER BY id DESC
+                LIMIT 10
+                """
+            ).fetchall()
+            latest_errors = connection.execute(
+                """
+                SELECT id, created_at, agent_name, message, details
+                FROM agent_logs
+                WHERE level = 'ERROR'
                 ORDER BY id DESC
                 LIMIT 10
                 """
@@ -144,6 +251,9 @@ class Database:
             "total_analyses": total,
             "categories": [dict(row) for row in categories],
             "latest_analyses": [dict(row) for row in latest],
+            "sources": [dict(row) for row in sources],
+            "latest_imports": [dict(row) for row in latest_imports],
+            "latest_errors": [dict(row) for row in latest_errors],
         }
 
     def latest_logs(self, limit: int = 20) -> list[dict[str, Any]]:

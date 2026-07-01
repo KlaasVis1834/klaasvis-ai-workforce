@@ -323,9 +323,24 @@ button:hover,
     background: var(--accent-strong);
 }
 
+button:disabled {
+    background: #b8c3ca;
+    cursor: not-allowed;
+}
+
 .button.secondary {
     background: var(--surface-soft);
     color: var(--text);
+}
+
+.import-actions {
+    display: grid;
+    gap: 12px;
+}
+
+.import-actions form,
+.import-actions button {
+    width: 100%;
 }
 
 .json-output {
@@ -398,6 +413,16 @@ button:hover,
     background: #fff4d8;
     color: var(--warning);
     font-weight: 700;
+}
+
+.flash.success {
+    background: #dff8ec;
+    color: var(--ok);
+}
+
+.flash.error {
+    background: #fff0ef;
+    color: var(--danger);
 }
 
 @media (max-width: 920px) {
