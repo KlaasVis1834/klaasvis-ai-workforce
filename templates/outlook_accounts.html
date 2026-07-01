@@ -28,15 +28,15 @@
 
         {% if outlook_status.connected %}
             <div class="button-row">
-                <form method="post" action="{{ url_for('outlook_sync_now') }}">
+                <form method="post" action="{{ url_for('outlook_sync_account', account_id=allowed_outlook_email) }}">
                     <button type="submit">Synchroniseer nu</button>
                 </form>
-                <form method="post" action="{{ url_for('outlook_disconnect') }}">
+                <form method="post" action="{{ url_for('outlook_disconnect_account', account_id=allowed_outlook_email) }}">
                     <button class="danger" type="submit">Ontkoppel account</button>
                 </form>
             </div>
         {% else %}
-            <a class="button" href="{{ url_for('microsoft_login') }}">Outlook-account koppelen</a>
+            <a class="button" href="/outlook/connect">Outlook-account koppelen</a>
         {% endif %}
     </article>
 

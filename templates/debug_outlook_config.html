@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Outlook OAuth Debug - Klaas Vis AI Workforce{% endblock %}
+{% block content %}
+<section class="page-header">
+    <div>
+        <p class="eyebrow">OAuth diagnose</p>
+        <h1>Outlook configuratie</h1>
+    </div>
+</section>
+
+<section class="panel">
+    <h2>Configuratie</h2>
+    <dl class="result-list">
+        <div><dt>MICROSOFT_TENANT_ID aanwezig</dt><dd>{{ config.tenant_id_present }}</dd></div>
+        <div><dt>MICROSOFT_CLIENT_ID aanwezig</dt><dd>{{ config.client_id_present }}</dd></div>
+        <div><dt>MICROSOFT_CLIENT_SECRET aanwezig</dt><dd>{{ config.client_secret_present }}</dd></div>
+        <div><dt>MICROSOFT_REDIRECT_URI</dt><dd>{{ config.redirect_uri }}</dd></div>
+        <div><dt>ALLOWED_OUTLOOK_EMAIL</dt><dd>{{ config.allowed_outlook_email }}</dd></div>
+        <div><dt>Bestaat route /outlook/connect</dt><dd>{{ config.outlook_connect_route }}</dd></div>
+        <div><dt>Bestaat route /outlook/callback</dt><dd>{{ config.outlook_callback_route }}</dd></div>
+    </dl>
+</section>
+{% endblock %}
