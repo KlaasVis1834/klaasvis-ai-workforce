@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Logs - Klaas Vis AI Workforce{% endblock %}
+{% block content %}
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Systeemactiviteit</p>
+        <h1>Logs</h1>
+    </div>
+</section>
+
+<section class="panel">
+    {% if logs %}
+        <div class="log-list">
+            {% for log in logs %}
+                <div>
+                    <span class="log-level {{ log.level|lower }}">{{ log.level }}</span>
+                    <p>{{ log.message }}</p>
+                    {% if log.details %}<code>{{ log.details }}</code>{% endif %}
+                    <small>{{ log.created_at }} · {{ log.agent_name }}</small>
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty">Nog geen logs.</p>
+    {% endif %}
+</section>
+{% endblock %}

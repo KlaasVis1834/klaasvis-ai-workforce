@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Analyse resultaat - Klaas Vis AI Workforce{% endblock %}
+{% block content %}
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Analyse resultaat{% if analysis_id %} #{{ analysis_id }}{% endif %}</p>
+        <h1>{{ analysis.categorie }}</h1>
+    </div>
+    <a class="button secondary" href="{{ url_for('mail_test') }}">Nieuwe analyse</a>
+</section>
+
+<section class="result-grid">
+    <article class="panel">
+        <h2>Classificatie</h2>
+        <dl class="result-list">
+            <div><dt>Categorie</dt><dd>{{ analysis.categorie }}</dd></div>
+            <div><dt>Vertrouwen</dt><dd>{{ "%.0f"|format((analysis.vertrouwen or 0) * 100) }}%</dd></div>
+            <div><dt>Prioriteit</dt><dd>{{ analysis.prioriteit }}</dd></div>
+            <div><dt>Maatschappij</dt><dd>{{ analysis.maatschappij or "-" }}</dd></div>
+            <div><dt>Klantnaam</dt><dd>{{ analysis.klantnaam or "-" }}</dd></div>
+            <div><dt>Polisnummer</dt><dd>{{ analysis.polisnummer or "-" }}</dd></div>
+            <div><dt>Schadenummer</dt><dd>{{ analysis.schadenummer or "-" }}</dd></div>
+            <div><dt>Kenteken</dt><dd>{{ analysis.kenteken or "-" }}</dd></div>
+            <div><dt>Bedrag</dt><dd>{{ analysis.bedrag or "-" }}</dd></div>
+            <div><dt>Menselijke controle nodig</dt><dd>{{ "Ja" if analysis.menselijke_controle_nodig else "Nee" }}</dd></div>
+        </dl>
+    </article>
+    <article class="panel">
+        <h2>Samenvatting</h2>
+        <p>{{ analysis.samenvatting or "Geen samenvatting beschikbaar." }}</p>
+        <h2>Voorgestelde actie</h2>
+        <p>{{ analysis.voorgestelde_actie or "Geen actie voorgesteld." }}</p>
+        <h2>Volgende agent</h2>
+        <p>{{ analysis.volgende_agent or "Geen volgende agent." }}</p>
+    </article>
+</section>
+
+<section class="panel">
+    <h2>Volledige JSON-output</h2>
+    <pre class="json-output">{{ analysis | tojson(indent=2) }}</pre>
+</section>
+{% endblock %}

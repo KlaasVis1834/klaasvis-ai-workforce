@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="nl">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Klaas Vis AI Workforce{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <aside class="sidebar">
+        <div class="brand">
+            <span class="brand-mark">KV</span>
+            <div>
+                <strong>Klaas Vis</strong>
+                <small>AI Workforce</small>
+            </div>
+        </div>
+        <nav>
+            <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' else '' }}">Dashboard</a>
+            <a href="{{ url_for('agents') }}" class="{{ 'active' if request.endpoint == 'agents' else '' }}">Agents</a>
+            <a href="{{ url_for('mail_test') }}" class="{{ 'active' if request.endpoint == 'mail_test' else '' }}">Mail Intake Test</a>
+            <a href="{{ url_for('logs') }}" class="{{ 'active' if request.endpoint == 'logs' else '' }}">Logs</a>
+            <a href="{{ url_for('settings') }}" class="{{ 'active' if request.endpoint == 'settings' else '' }}">Instellingen</a>
+        </nav>
+    </aside>
+
+    <main class="main">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-list">
+                    {% for category, message in messages %}
+                        <div class="flash {{ category }}">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+    </main>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Klaas Vis AI Workforce{% endblock %}
+{% block content %}
+<section class="page-header">
+    <div>
+        <p class="eyebrow">AI Command Center</p>
+        <h1>Klaas Vis AI Workforce</h1>
+    </div>
+    <span class="model-pill">Model: {{ active_model }}</span>
+</section>
+
+<section class="metric-grid">
+    <article class="metric">
+        <span>Status Ollama</span>
+        <strong class="status {{ ollama_status }}">{{ ollama_status }}</strong>
+    </article>
+    <article class="metric">
+        <span>Status database</span>
+        <strong class="status {{ database_status }}">{{ database_status }}</strong>
+    </article>
+    <article class="metric">
+        <span>Geanalyseerde e-mails</span>
+        <strong>{{ stats.total_analyses }}</strong>
+    </article>
+    <article class="metric">
+        <span>Actief model</span>
+        <strong>{{ active_model }}</strong>
+    </article>
+</section>
+
+<section class="two-column">
+    <article class="panel">
+        <h2>Mails per categorie</h2>
+        {% if stats.categories %}
+            <div class="category-list">
+                {% for item in stats.categories %}
+                    <div>
+                        <span>{{ item.category }}</span>
+                        <strong>{{ item.count }}</strong>
+                    </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p class="empty">Nog geen analyses opgeslagen.</p>
+        {% endif %}
+    </article>
+
+    <article class="panel">
+        <h2>Laatste logs</h2>
+        {% if logs %}
+            <div class="log-list compact">
+                {% for log in logs %}
+                    <div>
+                        <span class="log-level {{ log.level|lower }}">{{ log.level }}</span>
+                        <p>{{ log.message }}</p>
+                        <small>{{ log.created_at }} · {{ log.agent_name }}</small>
+                    </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p class="empty">Nog geen logs.</p>
+        {% endif %}
+    </article>
+</section>
+
+<section class="panel">
+    <h2>Laatste 10 analyses</h2>
+    {% if stats.latest_analyses %}
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Tijd</th>
+                        <th>Afzender</th>
+                        <th>Onderwerp</th>
+                        <th>Categorie</th>
+                        <th>Vertrouwen</th>
+                        <th>Controle</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in stats.latest_analyses %}
+                        <tr>
+                            <td>{{ item.created_at }}</td>
+                            <td>{{ item.sender }}</td>
+                            <td>{{ item.subject }}</td>
+                            <td>{{ item.category }}</td>
+                            <td>{{ "%.0f"|format((item.confidence or 0) * 100) }}%</td>
+                            <td>{{ "Ja" if item.human_review_required else "Nee" }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <p class="empty">Analyseer een testmail om hier resultaten te zien.</p>
+    {% endif %}
+</section>
+{% endblock %}

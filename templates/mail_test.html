@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Mail Intake Test - Klaas Vis AI Workforce{% endblock %}
+{% block content %}
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Handmatige analyse</p>
+        <h1>Mail Intake Test</h1>
+    </div>
+</section>
+
+<form class="mail-form" method="post" action="{{ url_for('mail_test') }}">
+    <div class="form-grid">
+        <label>Afzender
+            <input type="email" name="sender" placeholder="klant@example.nl">
+        </label>
+        <label>Ontvanger
+            <input type="email" name="recipient" placeholder="info@klaasvis.nl">
+        </label>
+    </div>
+    <label>Onderwerp
+        <input type="text" name="subject" placeholder="Onderwerp van de e-mail">
+    </label>
+    <label>E-mailtekst
+        <textarea name="body" rows="12" required placeholder="Plak hier de volledige e-mailtekst"></textarea>
+    </label>
+    <div class="form-grid">
+        <label>Bijlagen aanwezig
+            <select name="has_attachments">
+                <option value="no">Nee</option>
+                <option value="yes">Ja</option>
+            </select>
+        </label>
+        <label>Bijlagennamen
+            <input type="text" name="attachment_names" placeholder="schadeformulier.pdf, foto.jpg">
+        </label>
+    </div>
+    <button type="submit">Analyseer e-mail</button>
+</form>
+{% endblock %}

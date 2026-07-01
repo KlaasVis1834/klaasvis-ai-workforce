@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Agents - Klaas Vis AI Workforce{% endblock %}
+{% block content %}
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Agent Framework</p>
+        <h1>Agents</h1>
+    </div>
+</section>
+
+<section class="agent-grid">
+    <article class="agent-card active-agent">
+        <div>
+            <h2>{{ mail_agent.naam }}</h2>
+            <span class="status online">{{ mail_agent.status }}</span>
+        </div>
+        <p>{{ mail_agent.omschrijving }}</p>
+        <dl>
+            <div><dt>Versie</dt><dd>{{ mail_agent.versie }}</dd></div>
+            <div><dt>Model</dt><dd>{{ mail_agent.model }}</dd></div>
+            <div><dt>Laatste activiteit</dt><dd>{{ mail_agent.laatste_activiteit or "Nog geen activiteit" }}</dd></div>
+        </dl>
+    </article>
+
+    {% for agent in future_agents %}
+        <article class="agent-card muted">
+            <div>
+                <h2>{{ agent.naam }}</h2>
+                <span class="status offline">{{ agent.status }}</span>
+            </div>
+            <p>{{ agent.omschrijving }}</p>
+        </article>
+    {% endfor %}
+</section>
+{% endblock %}

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Fout - Klaas Vis AI Workforce{% endblock %}
+{% block content %}
+<section class="page-header">
+    <div>
+        <p class="eyebrow">Foutmelding</p>
+        <h1>Er ging iets mis</h1>
+    </div>
+</section>
+<section class="panel">
+    <p>{{ error }}</p>
+    <a class="button secondary" href="{{ url_for('dashboard') }}">Terug naar dashboard</a>
+</section>
+{% endblock %}
