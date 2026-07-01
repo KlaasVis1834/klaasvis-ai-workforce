@@ -1,38 +1,50 @@
 {% extends "base.html" %}
-{% block title %}Outlook Mailbox - Klaas Vis AI Workforce{% endblock %}
+{% block title %}Outlook Account - Klaas Vis AI Workforce{% endblock %}
 {% block content %}
 <section class="page-header">
     <div>
-        <p class="eyebrow">Echte mail intake</p>
-        <h1>Outlook Mailbox</h1>
+        <p class="eyebrow">Toegestane mailbox</p>
+        <h1>Outlook Account</h1>
     </div>
     <span class="status {{ 'online' if outlook_status.connected else 'offline' }}">
-        {{ "Verbonden" if outlook_status.connected else "Niet verbonden" }}
+        {{ outlook_status.status|capitalize }}
     </span>
 </section>
 
 <section class="two-column">
     <article class="panel">
-        <h2>Outlook verbinding</h2>
+        <h2>Accountkoppeling</h2>
         <dl class="result-list">
-            <div><dt>Configuratie</dt><dd>{{ "Compleet" if outlook_status.configured else "Onvolledig" }}</dd></div>
-            <div><dt>Status</dt><dd>{{ "Verbonden" if outlook_status.connected else "Niet verbonden" }}</dd></div>
-            <div><dt>Account</dt><dd>
-                {% if outlook_status.user %}
-                    {{ outlook_status.user.display_name or outlook_status.user.mail }}<br>
-                    <small>{{ outlook_status.user.mail }}</small>
+            <div><dt>Toegestaan account</dt><dd>{{ allowed_outlook_email or "-" }}</dd></div>
+            <div><dt>Status</dt><dd>{{ outlook_status.status }}</dd></div>
+            <div><dt>Gekoppeld account</dt><dd>
+                {% if outlook_status.connected and outlook_status.user %}
+                    {{ outlook_status.user.mail }}
                 {% else %}
                     -
                 {% endif %}
             </dd></div>
         </dl>
-        <a class="button" href="{{ url_for('microsoft_login') }}">Verbind Outlook</a>
+
+        {% if outlook_status.connected %}
+            <div class="button-row">
+                <form method="post" action="{{ url_for('outlook_sync_now') }}">
+                    <button type="submit">Synchroniseer nu</button>
+                </form>
+                <form method="post" action="{{ url_for('outlook_disconnect') }}">
+                    <button class="danger" type="submit">Ontkoppel account</button>
+                </form>
+            </div>
+        {% else %}
+            <a class="button" href="{{ url_for('microsoft_login') }}">Outlook-account koppelen</a>
+        {% endif %}
     </article>
 
     <article class="panel">
-        <h2>Automatische verwerking</h2>
+        <h2>Automatische synchronisatie</h2>
         <dl class="result-list">
             <div><dt>Mail Agent</dt><dd>{{ "Online" if monitor_status.running else "Offline" }}</dd></div>
+            <div><dt>Mailbox</dt><dd>{{ allowed_outlook_email or "-" }}</dd></div>
             <div><dt>Scan interval</dt><dd>15 seconden</dd></div>
             <div><dt>Laatste synchronisatie</dt><dd>{{ monitor_status.last_sync or "-" }}</dd></div>
             <div><dt>Laatste mailbox scan</dt><dd>{{ monitor_status.last_scan or "-" }}</dd></div>
@@ -42,7 +54,7 @@
 </section>
 
 <section class="panel">
-    <h2>Laatste Outlook imports</h2>
+    <h2>Laatste Outlook analyses</h2>
     {% if latest_imports %}
         <div class="table-wrap">
             <table>
@@ -71,7 +83,7 @@
             </table>
         </div>
     {% else %}
-        <p class="empty">Nog geen Outlook-mails geimporteerd.</p>
+        <p class="empty">Nog geen Outlook-mails verwerkt.</p>
     {% endif %}
 </section>
 {% endblock %}

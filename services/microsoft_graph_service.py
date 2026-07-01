@@ -25,12 +25,14 @@ class MicrosoftGraphService:
         client_secret: str,
         redirect_uri: str,
         token_store: TokenStore,
+        allowed_email: str,
     ) -> None:
         self.tenant_id = tenant_id
         self.client_id = client_id
         self.client_secret = client_secret
         self.redirect_uri = redirect_uri
         self.token_store = token_store
+        self.allowed_email = allowed_email.strip().lower()
 
     @property
     def configured(self) -> bool:
@@ -40,6 +42,7 @@ class MicrosoftGraphService:
                 self.client_id,
                 self.client_secret,
                 self.redirect_uri,
+                self.allowed_email,
                 self.client_secret != "VUL_HIER_JE_NIEUWE_SECRET_IN",
             ]
         )
@@ -61,7 +64,7 @@ class MicrosoftGraphService:
         return f"{self._authority_url()}/oauth2/v2.0/authorize?{query}"
 
     def exchange_code(self, code: str, code_verifier: str) -> dict[str, Any]:
-        token_data = self._post_token(
+        return self._post_token(
             {
                 "client_id": self.client_id,
                 "client_secret": self.client_secret,
@@ -72,7 +75,28 @@ class MicrosoftGraphService:
                 "code_verifier": code_verifier,
             }
         )
-        return self._save_token_response(token_data)
+
+    def profile_from_token(self, access_token: str) -> dict[str, Any]:
+        response = requests.get(
+            f"{GRAPH_BASE_URL}/me",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def account_email(self, profile: dict[str, Any]) -> str:
+        mail = (profile.get("mail") or "").strip().lower()
+        user_principal_name = (profile.get("userPrincipalName") or "").strip().lower()
+        return mail or user_principal_name
+
+    def profile_is_allowed(self, profile: dict[str, Any]) -> bool:
+        mail = (profile.get("mail") or "").strip().lower()
+        user_principal_name = (profile.get("userPrincipalName") or "").strip().lower()
+        return self.allowed_email in {mail, user_principal_name}
+
+    def save_authorized_token(self, token_data: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+        return self._save_token_response(token_data, profile)
 
     def refresh_access_token(self) -> dict[str, Any] | None:
         token = self.token_store.load()
@@ -92,12 +116,25 @@ class MicrosoftGraphService:
     def connection_status(self) -> dict[str, Any]:
         token = self.token_store.load()
         if not token:
-            return {"connected": False, "configured": self.configured, "user": None}
+            return {
+                "connected": False,
+                "configured": self.configured,
+                "status": "niet verbonden",
+                "user": None,
+                "allowed_email": self.allowed_email,
+            }
+        expires_at = int(token.get("expires_at", 0) or 0)
+        expired = expires_at <= int(time.time()) + 60
+        user = token.get("user") or {}
+        user_email = (user.get("mail") or "").strip().lower()
+        account_valid = user_email == self.allowed_email
         return {
-            "connected": bool(token.get("access_token") or token.get("refresh_token")),
+            "connected": bool((token.get("access_token") or token.get("refresh_token")) and account_valid),
             "configured": self.configured,
-            "user": token.get("user"),
-            "expires_at": token.get("expires_at"),
+            "status": "fout" if not account_valid else ("verlopen" if expired else "verbonden"),
+            "user": user if account_valid else None,
+            "expires_at": expires_at,
+            "allowed_email": self.allowed_email,
         }
 
     def get_access_token(self) -> str | None:
@@ -136,7 +173,7 @@ class MicrosoftGraphService:
             ),
         }
         response = self._graph_get(
-            f"/me/mailFolders/inbox/messages?{urlencode(params)}",
+            f"/me/messages?{urlencode(params)}",
             headers={"Prefer": 'outlook.body-content-type="text"'},
         )
         messages = response.get("value", [])
@@ -204,20 +241,20 @@ class MicrosoftGraphService:
         response.raise_for_status()
         return response.json()
 
-    def _save_token_response(self, token_data: dict[str, Any]) -> dict[str, Any]:
+    def _save_token_response(
+        self,
+        token_data: dict[str, Any],
+        profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         current = self.token_store.load() or {}
         merged = {**current, **token_data}
         merged["expires_at"] = int(time.time()) + int(token_data.get("expires_in", 3600))
-        self.token_store.save(merged)
-        try:
-            profile = self.get_profile()
+        if profile:
             merged["user"] = {
                 "display_name": profile.get("displayName"),
                 "mail": profile.get("mail") or profile.get("userPrincipalName"),
             }
-            self.token_store.save(merged)
-        except requests.RequestException:
-            pass
+        self.token_store.save(merged)
         return merged
 
     def _authority_url(self) -> str:

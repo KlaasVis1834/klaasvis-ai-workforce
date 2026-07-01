@@ -36,6 +36,7 @@ MICROSOFT_CLIENT_ID=
 MICROSOFT_CLIENT_SECRET=
 MICROSOFT_REDIRECT_URI=http://localhost:5000/auth/microsoft/callback
 MICROSOFT_TOKEN_PATH=database/microsoft_token.json
+ALLOWED_OUTLOOK_EMAIL=<toegestaan-outlook-account>
 ```
 
 ## Ollama
@@ -93,10 +94,12 @@ MICROSOFT_CLIENT_SECRET=...
 Start daarna de app en open:
 
 ```text
-http://localhost:5000/mailbox
+http://localhost:5000/outlook/accounts
 ```
 
 Klik op `Verbind Outlook` en log in via Microsoft. Na succesvolle OAuth-login start de Mail Intake Agent automatisch.
+
+Alleen het account uit `ALLOWED_OUTLOOK_EMAIL` mag gekoppeld worden. De applicatie controleert na Microsoft OAuth eerst `/me` via Graph en accepteert alleen een exacte match op `mail` of `userPrincipalName`. Andere accounts worden geweigerd voordat tokens lokaal worden opgeslagen.
 
 De achtergrondservice scant de mailbox elke 15 seconden. Nieuwe Outlook-mails worden automatisch opgehaald, geanalyseerd en opgeslagen. Mails worden niet verwijderd, verplaatst of beantwoord.
 

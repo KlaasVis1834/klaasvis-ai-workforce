@@ -338,6 +338,24 @@ button:disabled {
     color: var(--text);
 }
 
+.button-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.button-row form {
+    margin: 0;
+}
+
+button.danger {
+    background: var(--danger);
+}
+
+button.danger:hover {
+    background: #8f1d14;
+}
+
 .import-actions {
     display: grid;
     gap: 12px;

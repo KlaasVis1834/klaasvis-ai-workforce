@@ -32,6 +32,7 @@ MICROSOFT_REDIRECT_URI = os.getenv(
     "http://localhost:5000/auth/microsoft/callback",
 )
 MICROSOFT_TOKEN_PATH = os.getenv("MICROSOFT_TOKEN_PATH", "database/microsoft_token.json")
+ALLOWED_OUTLOOK_EMAIL = os.getenv("ALLOWED_OUTLOOK_EMAIL", "").strip().lower()
 
 app = Flask(__name__)
 app.secret_key = APP_SECRET_KEY
@@ -47,6 +48,7 @@ graph_service = MicrosoftGraphService(
     MICROSOFT_CLIENT_SECRET,
     MICROSOFT_REDIRECT_URI,
     token_store,
+    ALLOWED_OUTLOOK_EMAIL,
 )
 
 Path("logs").mkdir(exist_ok=True)
@@ -103,11 +105,17 @@ def mail_test():
 
 @app.route("/mailbox")
 def mailbox():
+    return redirect(url_for("outlook_accounts"))
+
+
+@app.route("/outlook/accounts")
+def outlook_accounts():
     return render_template(
-        "mailbox.html",
+        "outlook_accounts.html",
         outlook_status=graph_service.connection_status(),
         monitor_status=mailbox_monitor.snapshot(),
         latest_imports=database.dashboard_stats()["latest_imports"],
+        allowed_outlook_email=ALLOWED_OUTLOOK_EMAIL,
     )
 
 
@@ -116,7 +124,7 @@ def microsoft_login():
     if not graph_service.configured:
         database.log("Outlook", "ERROR", "Microsoft OAuth niet geconfigureerd")
         flash("Vul eerst de Microsoft .env variabelen in, inclusief een echte client secret.", "error")
-        return redirect(url_for("mailbox"))
+        return redirect(url_for("outlook_accounts"))
 
     state = uuid.uuid4().hex
     code_verifier, code_challenge = create_pkce_pair()
@@ -133,23 +141,34 @@ def microsoft_callback():
         details = request.args.get("error_description", error)
         database.log("Outlook", "ERROR", "Microsoft OAuth mislukt", details)
         flash(f"Microsoft login mislukt: {details}", "error")
-        return redirect(url_for("mailbox"))
+        return redirect(url_for("outlook_accounts"))
 
     if request.args.get("state") != session.get("microsoft_oauth_state"):
         database.log("Outlook", "ERROR", "Microsoft OAuth state ongeldig")
         flash("Microsoft login afgebroken: ongeldige sessiestatus.", "error")
-        return redirect(url_for("mailbox"))
+        return redirect(url_for("outlook_accounts"))
 
     code = request.args.get("code")
     code_verifier = session.get("microsoft_code_verifier")
     if not code or not code_verifier:
         database.log("Outlook", "ERROR", "Microsoft OAuth callback zonder code")
         flash("Microsoft login gaf geen autorisatiecode terug.", "error")
-        return redirect(url_for("mailbox"))
+        return redirect(url_for("outlook_accounts"))
 
     try:
-        graph_service.exchange_code(code, code_verifier)
+        token_data = graph_service.exchange_code(code, code_verifier)
+        profile = graph_service.profile_from_token(token_data["access_token"])
+        login_email = graph_service.account_email(profile)
+        if not graph_service.profile_is_allowed(profile):
+            database.log("Outlook", "ERROR", "Niet-toegestaan Outlook-account geweigerd", login_email)
+            flash(
+                f"Dit Outlook-account is niet toegestaan. Alleen {ALLOWED_OUTLOOK_EMAIL} mag worden gekoppeld.",
+                "error",
+            )
+            return redirect(url_for("outlook_accounts"))
+        graph_service.save_authorized_token(token_data, profile)
         database.log("Outlook", "INFO", "Outlook verbonden")
+        database.log("Outlook", "INFO", "Toegestaan Outlook-account gekoppeld", login_email)
         database.log("Outlook", "INFO", "OAuth OK")
         mailbox_monitor.run_once()
         flash("Outlook is verbonden.", "success")
@@ -160,14 +179,36 @@ def microsoft_callback():
         session.pop("microsoft_oauth_state", None)
         session.pop("microsoft_code_verifier", None)
 
-    return redirect(url_for("mailbox"))
+    return redirect(url_for("outlook_accounts"))
 
 
 @app.route("/mailbox/import", methods=["GET", "POST"])
 def import_mailbox():
     database.log("Mail Agent", "INFO", "Handmatige import route aangeroepen; automatische monitor actief")
     flash("De Mail Intake Agent scant Outlook automatisch elke 15 seconden.", "success")
-    return redirect(url_for("mailbox"))
+    return redirect(url_for("outlook_accounts"))
+
+
+@app.route("/outlook/accounts/sync", methods=["POST"])
+def outlook_sync_now():
+    try:
+        result = mailbox_monitor.run_once()
+        flash(
+            f"Synchronisatie voltooid: {result['imported']} nieuwe mails, {result['duplicates']} duplicaten, {result['failed']} fouten.",
+            "success",
+        )
+    except Exception as exc:
+        database.log("Outlook", "ERROR", "Handmatige synchronisatie mislukt", str(exc))
+        flash(f"Synchronisatie mislukt: {exc}", "error")
+    return redirect(url_for("outlook_accounts"))
+
+
+@app.route("/outlook/accounts/disconnect", methods=["POST"])
+def outlook_disconnect():
+    token_store.clear()
+    database.log("Outlook", "INFO", "Outlook-account ontkoppeld", ALLOWED_OUTLOOK_EMAIL)
+    flash("Outlook-account is ontkoppeld.", "success")
+    return redirect(url_for("outlook_accounts"))
 
 
 def import_outlook_messages(mode: str = "poll") -> dict[str, int]:
@@ -231,10 +272,16 @@ mailbox_monitor.start()
 
 @app.route("/api/status")
 def api_status():
+    outlook_status = graph_service.connection_status()
     return jsonify(
         {
             "mail_agent": mail_agent.metadata(),
-            "outlook": graph_service.connection_status(),
+            "outlook": {
+                "connected": outlook_status.get("connected"),
+                "configured": outlook_status.get("configured"),
+                "status": outlook_status.get("status"),
+                "allowed_email": outlook_status.get("allowed_email"),
+            },
             "monitor": mailbox_monitor.snapshot(),
             "stats": database.dashboard_stats(),
         }
