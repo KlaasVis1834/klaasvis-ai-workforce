@@ -207,8 +207,16 @@ class Database:
             )
 
     def dashboard_stats(self) -> dict[str, Any]:
+        today = datetime.now().date().isoformat()
         with self.connect() as connection:
             total = connection.execute("SELECT COUNT(*) FROM mail_analyses").fetchone()[0]
+            today_total = connection.execute(
+                "SELECT COUNT(*) FROM mail_analyses WHERE created_at LIKE ?",
+                (f"{today}%",),
+            ).fetchone()[0]
+            error_total = connection.execute(
+                "SELECT COUNT(*) FROM agent_logs WHERE level = 'ERROR'"
+            ).fetchone()[0]
             categories = connection.execute(
                 """
                 SELECT category, COUNT(*) AS count
@@ -255,12 +263,28 @@ class Database:
             ).fetchall()
         return {
             "total_analyses": total,
+            "today_analyses": today_total,
+            "error_count": error_total,
             "categories": [dict(row) for row in categories],
             "latest_analyses": [dict(row) for row in latest],
             "sources": [dict(row) for row in sources],
             "latest_imports": [dict(row) for row in latest_imports],
             "latest_errors": [dict(row) for row in latest_errors],
         }
+
+    def mail_analyses(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, created_at, source, received_at, sender, recipient, subject,
+                       category, confidence, priority, human_review_required, summary
+                FROM mail_analyses
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def latest_logs(self, limit: int = 20) -> list[dict[str, Any]]:
         with self.connect() as connection:

@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Analyse resultaat - Klaas Vis AI Workforce{% endblock %}
 {% block content %}
-<section class="page-header">
+<section class="hero-bar">
     <div>
         <p class="eyebrow">Analyse resultaat{% if analysis_id %} #{{ analysis_id }}{% endif %}</p>
         <h1>{{ analysis.categorie }}</h1>
     </div>
-    <a class="button secondary" href="{{ url_for('mail_test') }}">Nieuwe analyse</a>
+    <a class="button ghost" href="{{ url_for('mail_test') }}"><i class="ti ti-plus"></i>Nieuwe analyse</a>
 </section>
 
 <section class="result-grid">

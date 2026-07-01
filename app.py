@@ -60,11 +60,12 @@ database.log("Applicatie", "INFO", "Applicatie gestart")
 def future_agents() -> list[dict]:
     return [
         {"naam": "Document Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
-        {"naam": "Klant Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
+        {"naam": "Customer Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
         {"naam": "DDI Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
         {"naam": "ANVA Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
-        {"naam": "Schade Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
         {"naam": "Polis Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
+        {"naam": "Schade Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
+        {"naam": "Waardemeter Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
         {"naam": "Communicatie Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
         {"naam": "Compliance Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
     ]
@@ -72,7 +73,10 @@ def future_agents() -> list[dict]:
 
 @app.context_processor
 def inject_settings() -> dict:
-    return {"active_model": OLLAMA_MODEL}
+    return {
+        "active_model": OLLAMA_MODEL,
+        "allowed_outlook_email": ALLOWED_OUTLOOK_EMAIL,
+    }
 
 
 def mask_value(value: str, visible: int = 4) -> str:
@@ -118,6 +122,15 @@ def agents():
         "agents.html",
         mail_agent=mail_agent.metadata(),
         future_agents=future_agents(),
+    )
+
+
+@app.route("/mail-analyses")
+def mail_analyses():
+    return render_template(
+        "mail_analyses.html",
+        analyses=database.mail_analyses(100),
+        stats=database.dashboard_stats(),
     )
 
 

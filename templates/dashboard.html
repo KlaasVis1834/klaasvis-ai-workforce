@@ -1,44 +1,84 @@
 {% extends "base.html" %}
 {% block title %}Dashboard - Klaas Vis AI Workforce{% endblock %}
 {% block content %}
-<section class="page-header">
+<section class="hero-bar">
     <div>
         <p class="eyebrow">AI Command Center</p>
         <h1>Klaas Vis AI Workforce</h1>
     </div>
-    <span class="model-pill">Model: {{ active_model }}</span>
+    <div class="hero-actions">
+        <span class="status-chip {{ 'online' if outlook_status.connected else 'offline' }}">
+            <i class="ti ti-mail"></i>{{ "Outlook verbonden" if outlook_status.connected else "Outlook niet verbonden" }}
+        </span>
+        <a class="button ghost" href="{{ url_for('outlook_accounts') }}"><i class="ti ti-plug-connected"></i>Outlook Accounts</a>
+    </div>
 </section>
 
-<section class="metric-grid">
-    <article class="metric">
-        <span>Status Ollama</span>
-        <strong class="status {{ ollama_status }}">{{ ollama_status }}</strong>
+<section class="stat-grid">
+    <article class="stat-card accent-cyan">
+        <div><span>Outlook status</span><i class="ti ti-mail-bolt"></i></div>
+        <strong>{{ outlook_status.status or ("verbonden" if outlook_status.connected else "niet verbonden") }}</strong>
+        <small>{{ outlook_status.user.mail if outlook_status.connected and outlook_status.user else allowed_outlook_email }}</small>
     </article>
-    <article class="metric">
-        <span>Status database</span>
-        <strong class="status {{ database_status }}">{{ database_status }}</strong>
+    <article class="stat-card accent-green">
+        <div><span>Ollama</span><i class="ti ti-cpu"></i></div>
+        <strong>{{ ollama_status }}</strong>
+        <small>{{ active_model }}</small>
     </article>
-    <article class="metric">
-        <span>Geanalyseerde e-mails</span>
-        <strong>{{ stats.total_analyses }}</strong>
+    <article class="stat-card accent-amber">
+        <div><span>Database</span><i class="ti ti-database"></i></div>
+        <strong>{{ database_status }}</strong>
+        <small>{{ stats.total_analyses }} analyses totaal</small>
     </article>
-    <article class="metric">
-        <span>Actief model</span>
-        <strong>{{ active_model }}</strong>
+    <article class="stat-card accent-green">
+        <div><span>Mails vandaag</span><i class="ti ti-calendar-stats"></i></div>
+        <strong>{{ stats.today_analyses }}</strong>
+        <small>echte opgeslagen analyses</small>
+    </article>
+    <article class="stat-card accent-amber">
+        <div><span>Fouten</span><i class="ti ti-alert-triangle"></i></div>
+        <strong>{{ stats.error_count }}</strong>
+        <small>gelogde foutmeldingen</small>
     </article>
 </section>
 
-<section class="two-column">
-    <article class="panel">
-        <h2>Mails per categorie</h2>
-        {% if stats.categories %}
-            <div class="category-list">
-                {% for item in stats.categories %}
-                    <div>
-                        <span>{{ item.category }}</span>
-                        <strong>{{ item.count }}</strong>
-                    </div>
-                {% endfor %}
+<section class="dashboard-grid">
+    <article class="panel wide">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Analyseoverzicht</p>
+                <h2>Laatste echte analyses</h2>
+            </div>
+            <a href="{{ url_for('mail_analyses') }}" class="text-link">Alle analyses</a>
+        </div>
+        {% if stats.latest_analyses %}
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tijd</th>
+                            <th>Bron</th>
+                            <th>Afzender</th>
+                            <th>Onderwerp</th>
+                            <th>Categorie</th>
+                            <th>Vertrouwen</th>
+                            <th>Controle</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in stats.latest_analyses %}
+                            <tr>
+                                <td class="mono">{{ item.created_at }}</td>
+                                <td><span class="pill cyan">{{ item.source or "Onbekend" }}</span></td>
+                                <td>{{ item.sender or "-" }}</td>
+                                <td>{{ item.subject or "-" }}</td>
+                                <td><span class="pill amber">{{ item.category or "ONBEKEND" }}</span></td>
+                                <td>{{ "%.0f"|format((item.confidence or 0) * 100) }}%</td>
+                                <td>{{ "Ja" if item.human_review_required else "Nee" }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
         {% else %}
             <p class="empty">Nog geen analyses opgeslagen.</p>
@@ -46,111 +86,61 @@
     </article>
 
     <article class="panel">
-        <h2>Analyses per bron</h2>
-        {% if stats.sources %}
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Agents</p>
+                <h2>Agentstatus</h2>
+            </div>
+        </div>
+        <div class="agent-mini-list">
+            <div><span class="dot ok"></span><strong>Mail Intake Agent</strong><small>actief</small></div>
+            <div><span class="dot cyan"></span><strong>Mailbox Monitor</strong><small>{{ "online" if monitor_status.running else "offline" }}</small></div>
+            <div><span class="dot amber"></span><strong>Outlook</strong><small>{{ outlook_status.status }}</small></div>
+        </div>
+    </article>
+
+    <article class="panel">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Categorieen</p>
+                <h2>Mails per categorie</h2>
+            </div>
+        </div>
+        {% if stats.categories %}
             <div class="category-list">
-                {% for item in stats.sources %}
-                    <div>
-                        <span>{{ item.source or "Onbekend" }}</span>
-                        <strong>{{ item.count }}</strong>
-                    </div>
+                {% for item in stats.categories %}
+                    <div><span>{{ item.category or "ONBEKEND" }}</span><strong>{{ item.count }}</strong></div>
                 {% endfor %}
             </div>
         {% else %}
-            <p class="empty">Nog geen bronnen beschikbaar.</p>
+            <p class="empty">Nog geen categorieen beschikbaar.</p>
         {% endif %}
     </article>
-</section>
 
-<section class="panel">
-    <h2>Laatste 10 analyses</h2>
-    {% if stats.latest_analyses %}
-        <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Tijd</th>
-                        <th>Bron</th>
-                        <th>Ontvangen</th>
-                        <th>Afzender</th>
-                        <th>Onderwerp</th>
-                        <th>Categorie</th>
-                        <th>Vertrouwen</th>
-                        <th>Controle</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for item in stats.latest_analyses %}
-                        <tr>
-                            <td>{{ item.created_at }}</td>
-                            <td>{{ item.source or "Handmatig" }}</td>
-                            <td>{{ item.received_at or "-" }}</td>
-                            <td>{{ item.sender }}</td>
-                            <td>{{ item.subject }}</td>
-                            <td>{{ item.category }}</td>
-                            <td>{{ "%.0f"|format((item.confidence or 0) * 100) }}%</td>
-                            <td>{{ "Ja" if item.human_review_required else "Nee" }}</td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+    <article class="panel wide">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Live activiteit</p>
+                <h2>Recente echte logs</h2>
+            </div>
+            <a href="{{ url_for('logs') }}" class="text-link">Open logs</a>
         </div>
-    {% else %}
-        <p class="empty">Importeer of analyseer een mail om hier resultaten te zien.</p>
-    {% endif %}
-</section>
-
-<section class="two-column">
-    <article class="panel">
-        <h2>Laatste Outlook imports</h2>
-        {% if stats.latest_imports %}
-            <div class="log-list compact">
-                {% for item in stats.latest_imports %}
-                    <div>
-                        <span class="model-pill">{{ item.category }}</span>
-                        <p>{{ item.subject }}</p>
-                        <small>{{ item.created_at }} - {{ item.sender }}</small>
+        {% if logs %}
+            <div class="activity-feed">
+                {% for log in logs %}
+                    <div class="activity-item">
+                        <span class="activity-icon {{ log.level|lower }}"><i class="ti ti-activity"></i></span>
+                        <div>
+                            <strong>{{ log.message }}</strong>
+                            {% if log.details %}<p>{{ log.details }}</p>{% endif %}
+                            <small>{{ log.created_at }} · {{ log.agent_name }} · {{ log.level }}</small>
+                        </div>
                     </div>
                 {% endfor %}
             </div>
         {% else %}
-            <p class="empty">Nog geen Outlook imports.</p>
+            <p class="empty">Nog geen logs beschikbaar.</p>
         {% endif %}
     </article>
-
-    <article class="panel">
-        <h2>Laatste fouten</h2>
-        {% if stats.latest_errors %}
-            <div class="log-list compact">
-                {% for item in stats.latest_errors %}
-                    <div>
-                        <span class="log-level error">ERROR</span>
-                        <p>{{ item.message }}</p>
-                        {% if item.details %}<code>{{ item.details }}</code>{% endif %}
-                        <small>{{ item.created_at }} - {{ item.agent_name }}</small>
-                    </div>
-                {% endfor %}
-            </div>
-        {% else %}
-            <p class="empty">Geen recente fouten.</p>
-        {% endif %}
-    </article>
-</section>
-
-<section class="panel">
-    <h2>Laatste logs</h2>
-    {% if logs %}
-        <div class="log-list compact">
-            {% for log in logs %}
-                <div>
-                    <span class="log-level {{ log.level|lower }}">{{ log.level }}</span>
-                    <p>{{ log.message }}</p>
-                    <small>{{ log.created_at }} - {{ log.agent_name }}</small>
-                </div>
-            {% endfor %}
-        </div>
-    {% else %}
-        <p class="empty">Nog geen logs.</p>
-    {% endif %}
 </section>
 {% endblock %}

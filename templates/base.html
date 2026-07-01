@@ -4,6 +4,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Klaas Vis AI Workforce{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
@@ -15,14 +19,34 @@
                 <small>AI Workforce</small>
             </div>
         </div>
-        <nav>
-            <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' else '' }}">Dashboard</a>
-            <a href="{{ url_for('agents') }}" class="{{ 'active' if request.endpoint == 'agents' else '' }}">Agents</a>
-            <a href="{{ url_for('outlook_accounts') }}" class="{{ 'active' if request.endpoint in ['outlook_accounts', 'mailbox', 'microsoft_login', 'microsoft_callback', 'import_mailbox', 'outlook_sync_account', 'outlook_disconnect_account'] else '' }}">Outlook Accounts</a>
-            <a href="{{ url_for('mail_test') }}" class="{{ 'active' if request.endpoint == 'mail_test' else '' }}">Mail Intake Test</a>
-            <a href="{{ url_for('logs') }}" class="{{ 'active' if request.endpoint == 'logs' else '' }}">Logs</a>
-            <a href="{{ url_for('settings') }}" class="{{ 'active' if request.endpoint == 'settings' else '' }}">Instellingen</a>
+
+        <nav class="nav-list">
+            <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' else '' }}">
+                <i class="ti ti-layout-dashboard"></i><span>Dashboard</span>
+            </a>
+            <a href="{{ url_for('outlook_accounts') }}" class="{{ 'active' if request.endpoint in ['outlook_accounts', 'mailbox', 'microsoft_login', 'microsoft_callback', 'import_mailbox', 'outlook_sync_account', 'outlook_disconnect_account'] else '' }}">
+                <i class="ti ti-mail-cog"></i><span>Outlook Accounts</span>
+            </a>
+            <a href="{{ url_for('mail_analyses') }}" class="{{ 'active' if request.endpoint == 'mail_analyses' else '' }}">
+                <i class="ti ti-inbox"></i><span>Mail Analyses</span>
+            </a>
+            <a href="{{ url_for('agents') }}" class="{{ 'active' if request.endpoint == 'agents' else '' }}">
+                <i class="ti ti-robot"></i><span>Agents</span>
+            </a>
+            <a href="{{ url_for('logs') }}" class="{{ 'active' if request.endpoint == 'logs' else '' }}">
+                <i class="ti ti-activity"></i><span>Logs</span>
+            </a>
+            <a href="{{ url_for('settings') }}" class="{{ 'active' if request.endpoint == 'settings' else '' }}">
+                <i class="ti ti-settings"></i><span>Instellingen</span>
+            </a>
         </nav>
+
+        <div class="sidebar-status">
+            <p>Systeemstatus</p>
+            <div><span class="dot ok"></span><span>Local Flask runtime</span></div>
+            <div><span class="dot cyan"></span><span>{{ active_model }}</span></div>
+            <div><span class="dot amber"></span><span>{{ allowed_outlook_email or "Outlook niet ingesteld" }}</span></div>
+        </div>
     </aside>
 
     <main class="main">

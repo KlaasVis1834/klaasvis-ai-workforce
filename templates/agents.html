@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Agents - Klaas Vis AI Workforce{% endblock %}
 {% block content %}
-<section class="page-header">
+<section class="hero-bar">
     <div>
         <p class="eyebrow">Agent Framework</p>
         <h1>Agents</h1>
@@ -10,24 +10,26 @@
 
 <section class="agent-grid">
     <article class="agent-card active-agent">
-        <div>
-            <h2>{{ mail_agent.naam }}</h2>
-            <span class="status online">{{ mail_agent.status }}</span>
+        <div class="agent-card-head">
+            <span class="agent-icon active"><i class="ti ti-mail-bolt"></i></span>
+            <span class="status-chip online">{{ mail_agent.status }}</span>
         </div>
+        <h2>{{ mail_agent.naam }}</h2>
         <p>{{ mail_agent.omschrijving }}</p>
         <dl>
             <div><dt>Versie</dt><dd>{{ mail_agent.versie }}</dd></div>
             <div><dt>Model</dt><dd>{{ mail_agent.model }}</dd></div>
-            <div><dt>Laatste activiteit</dt><dd>{{ mail_agent.laatste_activiteit or "Nog geen activiteit" }}</dd></div>
+            <div><dt>Laatste activiteit</dt><dd>{{ mail_agent.laatste_activiteit or "-" }}</dd></div>
         </dl>
     </article>
 
     {% for agent in future_agents %}
-        <article class="agent-card muted">
-            <div>
-                <h2>{{ agent.naam }}</h2>
-                <span class="status offline">{{ agent.status }}</span>
+        <article class="agent-card">
+            <div class="agent-card-head">
+                <span class="agent-icon"><i class="ti ti-robot"></i></span>
+                <span class="status-chip offline">{{ agent.status }}</span>
             </div>
+            <h2>{{ agent.naam }}</h2>
             <p>{{ agent.omschrijving }}</p>
         </article>
     {% endfor %}

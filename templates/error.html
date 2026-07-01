@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Fout - Klaas Vis AI Workforce{% endblock %}
 {% block content %}
-<section class="page-header">
+<section class="hero-bar">
     <div>
         <p class="eyebrow">Foutmelding</p>
         <h1>Er ging iets mis</h1>
@@ -9,6 +9,6 @@
 </section>
 <section class="panel">
     <p>{{ error }}</p>
-    <a class="button secondary" href="{{ url_for('dashboard') }}">Terug naar dashboard</a>
+    <a class="button ghost" href="{{ url_for('dashboard') }}"><i class="ti ti-arrow-left"></i>Terug naar dashboard</a>
 </section>
 {% endblock %}

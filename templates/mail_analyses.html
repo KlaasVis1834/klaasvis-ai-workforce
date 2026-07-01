@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Mail Analyses - Klaas Vis AI Workforce{% endblock %}
+{% block content %}
+<section class="hero-bar">
+    <div>
+        <p class="eyebrow">Mail Intake</p>
+        <h1>Mail Analyses</h1>
+    </div>
+    <span class="status-chip online"><i class="ti ti-database"></i>{{ stats.total_analyses }} opgeslagen</span>
+</section>
+
+<section class="panel">
+    {% if analyses %}
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Tijd</th>
+                        <th>Bron</th>
+                        <th>Afzender</th>
+                        <th>Ontvanger</th>
+                        <th>Onderwerp</th>
+                        <th>Categorie</th>
+                        <th>Prioriteit</th>
+                        <th>Controle</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in analyses %}
+                        <tr>
+                            <td class="mono">{{ item.created_at }}</td>
+                            <td><span class="pill cyan">{{ item.source or "Onbekend" }}</span></td>
+                            <td>{{ item.sender or "-" }}</td>
+                            <td>{{ item.recipient or "-" }}</td>
+                            <td>{{ item.subject or "-" }}</td>
+                            <td><span class="pill amber">{{ item.category or "ONBEKEND" }}</span></td>
+                            <td>{{ item.priority or "normaal" }}</td>
+                            <td>{{ "Ja" if item.human_review_required else "Nee" }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <p class="empty">Nog geen mailanalyses opgeslagen.</p>
+    {% endif %}
+</section>
+{% endblock %}

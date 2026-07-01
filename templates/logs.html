@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Logs - Klaas Vis AI Workforce{% endblock %}
 {% block content %}
-<section class="page-header">
+<section class="hero-bar">
     <div>
         <p class="eyebrow">Systeemactiviteit</p>
         <h1>Logs</h1>
@@ -10,13 +10,15 @@
 
 <section class="panel">
     {% if logs %}
-        <div class="log-list">
+        <div class="activity-feed">
             {% for log in logs %}
-                <div>
-                    <span class="log-level {{ log.level|lower }}">{{ log.level }}</span>
-                    <p>{{ log.message }}</p>
-                    {% if log.details %}<code>{{ log.details }}</code>{% endif %}
-                    <small>{{ log.created_at }} · {{ log.agent_name }}</small>
+                <div class="activity-item">
+                    <span class="activity-icon {{ log.level|lower }}"><i class="ti ti-activity"></i></span>
+                    <div>
+                        <strong>{{ log.message }}</strong>
+                        {% if log.details %}<p>{{ log.details }}</p>{% endif %}
+                        <small>{{ log.created_at }} · {{ log.agent_name }} · {{ log.level }}</small>
+                    </div>
                 </div>
             {% endfor %}
         </div>

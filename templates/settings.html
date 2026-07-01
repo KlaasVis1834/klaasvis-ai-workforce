@@ -1,17 +1,23 @@
 {% extends "base.html" %}
 {% block title %}Instellingen - Klaas Vis AI Workforce{% endblock %}
 {% block content %}
-<section class="page-header">
+<section class="hero-bar">
     <div>
-        <p class="eyebrow">Placeholder</p>
+        <p class="eyebrow">Configuratie</p>
         <h1>Instellingen</h1>
     </div>
 </section>
 <section class="panel">
-    <h2>Configuratie</h2>
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">Lokale runtime</p>
+            <h2>Actieve instellingen</h2>
+        </div>
+    </div>
     <dl class="result-list">
         <div><dt>Ollama model</dt><dd>{{ active_model }}</dd></div>
-        <div><dt>Versie</dt><dd>v0.2</dd></div>
+        <div><dt>Outlook account</dt><dd>{{ allowed_outlook_email or "-" }}</dd></div>
+        <div><dt>Versie</dt><dd>AI Command Center</dd></div>
     </dl>
 </section>
 {% endblock %}

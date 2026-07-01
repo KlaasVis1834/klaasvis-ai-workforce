@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Outlook OAuth Debug - Klaas Vis AI Workforce{% endblock %}
 {% block content %}
-<section class="page-header">
+<section class="hero-bar">
     <div>
         <p class="eyebrow">OAuth diagnose</p>
         <h1>Outlook configuratie</h1>
@@ -9,7 +9,12 @@
 </section>
 
 <section class="panel">
-    <h2>Configuratie</h2>
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">Veilige debug</p>
+            <h2>Configuratie zonder secrets</h2>
+        </div>
+    </div>
     <dl class="result-list">
         <div><dt>MICROSOFT_TENANT_ID aanwezig</dt><dd>{{ config.tenant_id_present }}</dd></div>
         <div><dt>MICROSOFT_CLIENT_ID aanwezig</dt><dd>{{ config.client_id_present }}</dd></div>
