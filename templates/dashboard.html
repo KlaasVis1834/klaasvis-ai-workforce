@@ -9,29 +9,6 @@
     <span class="model-pill">Model: {{ active_model }}</span>
 </section>
 
-<section class="status-grid dashboard-live" data-refresh-seconds="15">
-    <article class="metric">
-        <span>Mail Agent</span>
-        <strong class="status {{ 'online' if monitor_status.running else 'offline' }}">{{ "Online" if monitor_status.running else "Offline" }}</strong>
-    </article>
-    <article class="metric">
-        <span>Outlook</span>
-        <strong class="status {{ 'online' if outlook_status.connected else 'offline' }}">{{ "Connected" if outlook_status.connected else "Disconnected" }}</strong>
-    </article>
-    <article class="metric">
-        <span>Laatste synchronisatie</span>
-        <strong>{{ monitor_status.last_sync or "-" }}</strong>
-    </article>
-    <article class="metric">
-        <span>Aantal nieuwe mails</span>
-        <strong>{{ monitor_status.new_mails }}</strong>
-    </article>
-    <article class="metric">
-        <span>Laatste mailbox scan</span>
-        <strong>{{ monitor_status.last_scan or "-" }}</strong>
-    </article>
-</section>
-
 <section class="metric-grid">
     <article class="metric">
         <span>Status Ollama</span>
@@ -42,7 +19,7 @@
         <strong class="status {{ database_status }}">{{ database_status }}</strong>
     </article>
     <article class="metric">
-        <span>Echte Outlook analyses</span>
+        <span>Geanalyseerde e-mails</span>
         <strong>{{ stats.total_analyses }}</strong>
     </article>
     <article class="metric">
@@ -64,7 +41,7 @@
                 {% endfor %}
             </div>
         {% else %}
-            <p class="empty">Nog geen echte Outlook analyses opgeslagen.</p>
+            <p class="empty">Nog geen analyses opgeslagen.</p>
         {% endif %}
     </article>
 
@@ -80,7 +57,7 @@
                 {% endfor %}
             </div>
         {% else %}
-            <p class="empty">Nog geen echte Outlook bronnen beschikbaar.</p>
+            <p class="empty">Nog geen bronnen beschikbaar.</p>
         {% endif %}
     </article>
 </section>
@@ -119,7 +96,7 @@
             </table>
         </div>
     {% else %}
-        <p class="empty">Nog geen echte Outlook analyses beschikbaar.</p>
+        <p class="empty">Importeer of analyseer een mail om hier resultaten te zien.</p>
     {% endif %}
 </section>
 
@@ -137,7 +114,7 @@
                 {% endfor %}
             </div>
         {% else %}
-            <p class="empty">Nog geen Outlook mails verwerkt.</p>
+            <p class="empty">Nog geen Outlook imports.</p>
         {% endif %}
     </article>
 

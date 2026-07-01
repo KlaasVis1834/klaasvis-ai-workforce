@@ -1,9 +1,18 @@
 document.addEventListener("DOMContentLoaded", () => {
-    const liveDashboard = document.querySelector(".dashboard-live");
-    if (!liveDashboard) {
+    const attachmentSelect = document.querySelector('select[name="has_attachments"]');
+    const attachmentInput = document.querySelector('input[name="attachment_names"]');
+
+    if (!attachmentSelect || !attachmentInput) {
         return;
     }
 
-    const seconds = Number(liveDashboard.dataset.refreshSeconds || "15");
-    window.setInterval(() => window.location.reload(), seconds * 1000);
+    const syncAttachmentInput = () => {
+        attachmentInput.disabled = attachmentSelect.value !== "yes";
+        if (attachmentInput.disabled) {
+            attachmentInput.value = "";
+        }
+    };
+
+    attachmentSelect.addEventListener("change", syncAttachmentInput);
+    syncAttachmentInput();
 });

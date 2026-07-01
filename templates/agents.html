@@ -21,17 +21,15 @@
             <div><dt>Laatste activiteit</dt><dd>{{ mail_agent.laatste_activiteit or "Nog geen activiteit" }}</dd></div>
         </dl>
     </article>
-    <article class="agent-card active-agent">
-        <div>
-            <h2>Mailbox Monitor</h2>
-            <span class="status {{ 'online' if monitor_status.running else 'offline' }}">{{ "online" if monitor_status.running else "offline" }}</span>
-        </div>
-        <p>Scant Outlook automatisch elke 15 seconden en verwerkt alleen nieuwe mail.</p>
-        <dl>
-            <div><dt>Laatste scan</dt><dd>{{ monitor_status.last_scan or "-" }}</dd></div>
-            <div><dt>Laatste sync</dt><dd>{{ monitor_status.last_sync or "-" }}</dd></div>
-            <div><dt>Nieuwe mails</dt><dd>{{ monitor_status.new_mails }}</dd></div>
-        </dl>
-    </article>
+
+    {% for agent in future_agents %}
+        <article class="agent-card muted">
+            <div>
+                <h2>{{ agent.naam }}</h2>
+                <span class="status offline">{{ agent.status }}</span>
+            </div>
+            <p>{{ agent.omschrijving }}</p>
+        </article>
+    {% endfor %}
 </section>
 {% endblock %}

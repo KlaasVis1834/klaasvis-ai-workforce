@@ -208,14 +208,11 @@ class Database:
 
     def dashboard_stats(self) -> dict[str, Any]:
         with self.connect() as connection:
-            total = connection.execute(
-                "SELECT COUNT(*) FROM mail_analyses WHERE source = 'Outlook'"
-            ).fetchone()[0]
+            total = connection.execute("SELECT COUNT(*) FROM mail_analyses").fetchone()[0]
             categories = connection.execute(
                 """
                 SELECT category, COUNT(*) AS count
                 FROM mail_analyses
-                WHERE source = 'Outlook'
                 GROUP BY category
                 ORDER BY count DESC, category ASC
                 """
@@ -225,7 +222,6 @@ class Database:
                 SELECT id, created_at, source, received_at, sender, subject, category,
                        confidence, human_review_required, import_batch_id
                 FROM mail_analyses
-                WHERE source = 'Outlook'
                 ORDER BY id DESC
                 LIMIT 10
                 """
@@ -234,7 +230,6 @@ class Database:
                 """
                 SELECT source, COUNT(*) AS count
                 FROM mail_analyses
-                WHERE source = 'Outlook'
                 GROUP BY source
                 ORDER BY count DESC, source ASC
                 """
@@ -266,27 +261,6 @@ class Database:
             "latest_imports": [dict(row) for row in latest_imports],
             "latest_errors": [dict(row) for row in latest_errors],
         }
-
-    def cleanup_non_production_mail_data(self) -> int:
-        with self.connect() as connection:
-            cursor = connection.execute(
-                """
-                DELETE FROM mail_analyses
-                WHERE source IS NULL OR source != 'Outlook'
-                """
-            )
-            return int(cursor.rowcount)
-
-    def cleanup_non_production_logs(self) -> int:
-        with self.connect() as connection:
-            cursor = connection.execute(
-                """
-                DELETE FROM agent_logs
-                WHERE message LIKE '%Handmatige mailtest%'
-                   OR message LIKE '%Handmatige import route%'
-                """
-            )
-            return int(cursor.rowcount)
 
     def latest_logs(self, limit: int = 20) -> list[dict[str, Any]]:
         with self.connect() as connection:

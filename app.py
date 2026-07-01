@@ -55,12 +55,19 @@ OUTLOOK_SCOPES = ["User.Read", "Mail.Read", "offline_access"]
 
 Path("logs").mkdir(exist_ok=True)
 database.log("Applicatie", "INFO", "Applicatie gestart")
-removed_rows = database.cleanup_non_production_mail_data()
-if removed_rows:
-    database.log("Database", "INFO", "Niet-productie maildata verwijderd", str(removed_rows))
-removed_logs = database.cleanup_non_production_logs()
-if removed_logs:
-    database.log("Database", "INFO", "Niet-productie logs verwijderd", str(removed_logs))
+
+
+def future_agents() -> list[dict]:
+    return [
+        {"naam": "Document Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
+        {"naam": "Klant Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
+        {"naam": "DDI Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
+        {"naam": "ANVA Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
+        {"naam": "Schade Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
+        {"naam": "Polis Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
+        {"naam": "Communicatie Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
+        {"naam": "Compliance Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
+    ]
 
 
 @app.context_processor
@@ -110,15 +117,50 @@ def agents():
     return render_template(
         "agents.html",
         mail_agent=mail_agent.metadata(),
-        monitor_status=mailbox_monitor.snapshot(),
+        future_agents=future_agents(),
     )
 
 
 @app.route("/mail-test", methods=["GET", "POST"])
 def mail_test():
-    database.log("Mail Agent", "INFO", "Handmatige mailtest route aangeroepen; automatische Outlook intake actief")
-    flash("De Mail Intake Agent verwerkt Outlook-mail automatisch. Handmatige invoer is uitgeschakeld.", "success")
-    return redirect(url_for("dashboard"))
+    if request.method == "GET":
+        return render_template("mail_test.html")
+
+    mail_data = {
+        "sender": request.form.get("sender", "").strip(),
+        "recipient": request.form.get("recipient", "").strip(),
+        "subject": request.form.get("subject", "").strip(),
+        "body": request.form.get("body", "").strip(),
+        "has_attachments": request.form.get("has_attachments") == "yes",
+        "attachment_names": request.form.get("attachment_names", "").strip(),
+        "source": "Handmatig",
+    }
+
+    database.log("Mail Intake Agent", "INFO", "Nieuwe analyse gestart", mail_data.get("subject"))
+    analysis = mail_agent.run(mail_data)
+
+    try:
+        analysis_id = database.save_mail_analysis(mail_data, analysis)
+        if mail_agent.last_error:
+            database.log("Mail Intake Agent", "ERROR", "Analyse mislukt", mail_agent.last_error)
+            if "json" in mail_agent.last_error.lower():
+                database.log("Mail Intake Agent", "ERROR", "JSON parse fout", mail_agent.last_error)
+        else:
+            database.log("Mail Intake Agent", "INFO", "Analyse geslaagd", f"Analyse ID {analysis_id}")
+    except Exception as exc:
+        database.log("Database", "ERROR", "Database fout", str(exc))
+        flash("Analyse uitgevoerd, maar opslaan in de database is mislukt.", "error")
+        analysis_id = None
+
+    if analysis.get("categorie") == "ONBEKEND" and analysis.get("vertrouwen") == 0.0:
+        database.log("Mail Intake Agent", "WARNING", "Analyse fallback gebruikt")
+
+    return render_template(
+        "mail_result.html",
+        mail_data=mail_data,
+        analysis=analysis,
+        analysis_id=analysis_id,
+    )
 
 
 @app.route("/mailbox")
