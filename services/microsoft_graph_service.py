@@ -152,6 +152,15 @@ class MicrosoftGraphService:
         return self._graph_get("/me")
 
     def fetch_messages(self, mode: str = "poll") -> list[dict[str, Any]]:
+        return self.fetch_inbox_messages(mode)
+
+    def fetch_inbox_messages(self, mode: str = "poll") -> list[dict[str, Any]]:
+        return self._fetch_folder_messages("inbox", "incoming", mode)
+
+    def fetch_sent_learning_messages(self, mode: str = "learning") -> list[dict[str, Any]]:
+        return self._fetch_folder_messages("sentitems", "outgoing", mode)
+
+    def _fetch_folder_messages(self, folder: str, direction: str, mode: str = "poll") -> list[dict[str, Any]]:
         top = 25 if mode == "poll" else 10
         params = {
             "$top": str(top),
@@ -173,13 +182,18 @@ class MicrosoftGraphService:
             ),
         }
         response = self._graph_get(
-            f"/me/messages?{urlencode(params)}",
+            f"/me/mailFolders/{folder}/messages?{urlencode(params)}",
             headers={"Prefer": 'outlook.body-content-type="text"'},
         )
         messages = response.get("value", [])
-        return [self.normalize_message(message) for message in messages[:top]]
+        return [self.normalize_message(message, folder, direction) for message in messages[:top]]
 
-    def normalize_message(self, message: dict[str, Any]) -> dict[str, Any]:
+    def normalize_message(
+        self,
+        message: dict[str, Any],
+        source_folder: str = "unknown",
+        direction: str = "incoming",
+    ) -> dict[str, Any]:
         attachments = self.fetch_attachment_metadata(message["id"]) if message.get("hasAttachments") else []
         body = message.get("body", {}).get("content") or ""
         sender = message.get("sender", {}).get("emailAddress", {})
@@ -190,6 +204,8 @@ class MicrosoftGraphService:
         ]
         return {
             "source": "Outlook",
+            "source_folder": source_folder,
+            "direction": direction,
             "message_id": message.get("id"),
             "internet_message_id": message.get("internetMessageId"),
             "conversation_id": message.get("conversationId"),

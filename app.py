@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import secrets
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
@@ -22,6 +23,7 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip()
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b").strip()
 DATABASE_PATH = os.getenv("DATABASE_PATH", "database/klaasvis_ai.db").strip()
 APP_SECRET_KEY = os.getenv("APP_SECRET_KEY", "change-this-secret").strip()
+ENABLE_SENT_LEARNING = os.getenv("ENABLE_SENT_LEARNING", "false").strip().lower() == "true"
 MICROSOFT_TENANT_ID = os.getenv("MICROSOFT_TENANT_ID", "").strip()
 MICROSOFT_CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID", "").strip()
 MICROSOFT_CLIENT_SECRET = os.getenv("MICROSOFT_CLIENT_SECRET", "").strip()
@@ -53,6 +55,20 @@ graph_service = MicrosoftGraphService(
 )
 
 OUTLOOK_SCOPES = ["User.Read", "Mail.Read", "offline_access"]
+MAIL_AGENT_RESET_MARKER = Path("database/mail_agent_reset_at.txt")
+AGENT_ROUTING = {
+    "INBOEDELWAARDEMETER": "Waardemeter Agent",
+    "HERBOUWWAARDEMETER": "Waardemeter Agent",
+    "SCHADE": "Schade Agent",
+    "SCHADE_UITKERING": "Schade Agent",
+    "WIJZIGING": "Polis Agent",
+    "BEËINDIGING": "Polis Agent",
+    "BEÃ‹INDIGING": "Polis Agent",
+    "BEEINDIGING": "Polis Agent",
+    "POLISDOCUMENT": "Document Agent",
+    "FACTUUR": "Document Agent",
+    "KLANTVRAAG": "Communicatie Agent",
+}
 
 Path("logs").mkdir(exist_ok=True)
 database.log("Applicatie", "INFO", "Applicatie gestart")
@@ -79,6 +95,7 @@ database.log(
     ),
 )
 database.log("Applicatie", "INFO", "Flask session secret loaded", startup_yes_no(bool(APP_SECRET_KEY)))
+database.log("Outlook", "INFO", "Sent learning mode", startup_yes_no(ENABLE_SENT_LEARNING))
 
 
 def future_agents() -> list[dict]:
@@ -100,6 +117,7 @@ def inject_settings() -> dict:
     return {
         "active_model": OLLAMA_MODEL,
         "allowed_outlook_email": ALLOWED_OUTLOOK_EMAIL,
+        "sent_learning_enabled": ENABLE_SENT_LEARNING,
     }
 
 
@@ -119,6 +137,52 @@ def yes_no(value: bool) -> str:
     return "ja" if value else "nee"
 
 
+def route_mail_analysis(mail_data: dict, analysis: dict) -> dict:
+    routed = dict(analysis)
+    category = str(routed.get("categorie") or "ONBEKEND").upper()
+    if category == "BEEINDIGING":
+        category = "BEËINDIGING"
+    routed["categorie"] = category
+
+    source_folder = str(mail_data.get("source_folder") or "unknown").lower()
+    direction = str(mail_data.get("direction") or "incoming").lower()
+    confidence = float(routed.get("vertrouwen") or 0.0)
+
+    if source_folder == "sentitems" or direction == "outgoing":
+        routed["processing_status"] = "learning_only"
+        routed["volgende_agent"] = ""
+        routed["menselijke_controle_nodig"] = False
+        routed["requires_human_review"] = False
+        routed["reason_for_human_review"] = ""
+        return routed
+
+    next_agent = AGENT_ROUTING.get(category, "")
+    risky = confidence < 0.80 or category == "ONBEKEND" or not next_agent
+    model_requested_review = bool(
+        routed.get("requires_human_review", routed.get("menselijke_controle_nodig", False))
+    )
+    requires_review = risky or model_requested_review
+    routed["volgende_agent"] = next_agent
+    routed["requires_human_review"] = requires_review
+    routed["menselijke_controle_nodig"] = requires_review
+    if requires_review:
+        reasons = []
+        if category == "ONBEKEND":
+            reasons.append("Categorie onbekend.")
+        if confidence < 0.80:
+            reasons.append("Lage zekerheid in automatische classificatie.")
+        if not next_agent:
+            reasons.append("Geen volgende agent bepaald.")
+        if routed.get("reason_for_human_review"):
+            reasons.append(str(routed["reason_for_human_review"]))
+        routed["reason_for_human_review"] = " ".join(dict.fromkeys(reasons)) or "Menselijke controle vereist."
+        routed["processing_status"] = "needs_human"
+    else:
+        routed["reason_for_human_review"] = ""
+        routed["processing_status"] = "routed" if next_agent else "new"
+    return routed
+
+
 def session_key_summary() -> str:
     safe_keys = [
         key
@@ -126,6 +190,45 @@ def session_key_summary() -> str:
         if key in {"oauth_state", "oauth_code_verifier", "_flashes"}
     ]
     return ", ".join(sorted(safe_keys)) if safe_keys else "geen"
+
+
+def load_mail_reset_cutoff() -> datetime | None:
+    if not MAIL_AGENT_RESET_MARKER.exists():
+        return None
+    try:
+        raw_value = MAIL_AGENT_RESET_MARKER.read_text(encoding="utf-8").strip()
+        if not raw_value:
+            return None
+        return datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+    except (OSError, ValueError):
+        return None
+
+
+def parse_graph_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def filter_messages_after_reset(messages: list[dict]) -> tuple[list[dict], int]:
+    cutoff = load_mail_reset_cutoff()
+    if not cutoff:
+        return messages, 0
+    kept = []
+    skipped = 0
+    for message in messages:
+        received_at = parse_graph_datetime(message.get("received_at"))
+        if received_at and received_at <= cutoff:
+            skipped += 1
+            continue
+        kept.append(message)
+    return kept, skipped
 
 
 @app.route("/")
@@ -180,10 +283,12 @@ def mail_test():
         "has_attachments": request.form.get("has_attachments") == "yes",
         "attachment_names": request.form.get("attachment_names", "").strip(),
         "source": "Handmatig",
+        "source_folder": "unknown",
+        "direction": "incoming",
     }
 
     database.log("Mail Intake Agent", "INFO", "Nieuwe analyse gestart", mail_data.get("subject"))
-    analysis = mail_agent.run(mail_data)
+    analysis = route_mail_analysis(mail_data, mail_agent.run(mail_data))
 
     try:
         analysis_id = database.save_mail_analysis(mail_data, analysis)
@@ -366,14 +471,37 @@ def outlook_sync_account(account_id: str):
         flash("Synchronisatie geweigerd: dit Outlook-account is niet toegestaan.", "error")
         return redirect(url_for("outlook_accounts"))
     try:
+        database.log("Outlook", "INFO", "Inbox sync gestart")
         result = mailbox_monitor.run_once()
         flash(
-            f"Synchronisatie voltooid: {result['imported']} nieuwe mails, {result['duplicates']} duplicaten, {result['failed']} fouten.",
+            f"Inbox synchronisatie voltooid: {result['imported']} nieuwe mails, {result['duplicates']} duplicaten, {result['failed']} fouten.",
             "success",
         )
     except Exception as exc:
         database.log("Outlook", "ERROR", "Handmatige synchronisatie mislukt", str(exc))
         flash(f"Synchronisatie mislukt: {exc}", "error")
+    return redirect(url_for("outlook_accounts"))
+
+
+@app.route("/outlook/sent-learning/<account_id>", methods=["POST"])
+def outlook_sent_learning(account_id: str):
+    if account_id.strip().lower() != ALLOWED_OUTLOOK_EMAIL:
+        database.log("Outlook", "ERROR", "Sent learning geweigerd voor niet-toegestaan account", account_id)
+        flash("Sent learning geweigerd: dit Outlook-account is niet toegestaan.", "error")
+        return redirect(url_for("outlook_accounts"))
+    if not ENABLE_SENT_LEARNING:
+        database.log("Outlook", "INFO", "Sentitems overgeslagen", "ENABLE_SENT_LEARNING=false")
+        flash("Leermodus voor verzonden berichten staat uit.", "error")
+        return redirect(url_for("outlook_accounts"))
+    try:
+        result = import_outlook_messages("learning")
+        flash(
+            f"Leermodus scan voltooid: {result['imported']} verzonden mails opgeslagen, {result['duplicates']} duplicaten, {result['failed']} fouten.",
+            "success",
+        )
+    except Exception as exc:
+        database.log("Outlook", "ERROR", "Sent learning scan mislukt", str(exc))
+        flash(f"Leermodus scan mislukt: {exc}", "error")
     return redirect(url_for("outlook_accounts"))
 
 
@@ -397,11 +525,25 @@ def outlook_disconnect_account(account_id: str):
 def import_outlook_messages(mode: str = "poll") -> dict[str, int]:
     import_batch_id = uuid.uuid4().hex
     database.log("Outlook", "INFO", "Mailbox scan gestart", f"modus={mode}; batch={import_batch_id}")
-    messages = graph_service.fetch_messages(mode)
-    database.log("Outlook", "INFO", "Graph OK", f"{len(messages)} mails opgehaald")
+    if mode == "learning":
+        if not ENABLE_SENT_LEARNING:
+            database.log("Outlook", "INFO", "Sentitems overgeslagen", "ENABLE_SENT_LEARNING=false")
+            return {"imported": 0, "duplicates": 0, "failed": 0}
+        messages = graph_service.fetch_sent_learning_messages(mode)
+        database.log("Outlook", "INFO", "Graph OK", f"{len(messages)} sentitems opgehaald voor leermodus")
+    else:
+        database.log("Outlook", "INFO", "Inbox sync gestart")
+        messages = graph_service.fetch_inbox_messages(mode)
+        database.log("Outlook", "INFO", "Aantal inbox mails opgehaald", str(len(messages)))
+        messages, skipped_by_reset = filter_messages_after_reset(messages)
+        if skipped_by_reset:
+            database.log("Outlook", "INFO", "Inbox mails overgeslagen door reset-watermark", str(skipped_by_reset))
+        database.log("Outlook", "INFO", "Aantal sentitems overgeslagen", "sentitems niet in hoofdworkflow")
     imported = 0
     duplicates = 0
     failed = 0
+    routed_count = 0
+    human_review_count = 0
 
     for mail_data in messages:
         database.log("Outlook", "INFO", "Mail opgehaald", mail_data.get("subject"))
@@ -414,7 +556,11 @@ def import_outlook_messages(mode: str = "poll") -> dict[str, int]:
 
         database.log("Mail Intake Agent", "INFO", "Mail ontvangen", mail_data.get("subject"))
         database.log("Mail Intake Agent", "INFO", "Ollama gestart", mail_data.get("internet_message_id"))
-        analysis = mail_agent.run(mail_data)
+        analysis = route_mail_analysis(mail_data, mail_agent.run(mail_data))
+        if analysis.get("processing_status") == "routed":
+            routed_count += 1
+        if analysis.get("requires_human_review"):
+            human_review_count += 1
         try:
             analysis_id = database.save_mail_analysis(mail_data, analysis)
             imported += 1
@@ -425,6 +571,15 @@ def import_outlook_messages(mode: str = "poll") -> dict[str, int]:
             else:
                 database.log("Mail Intake Agent", "INFO", "Analyse voltooid", f"Analyse ID {analysis_id}")
                 database.log("Database", "INFO", "Database opgeslagen", f"Analyse ID {analysis_id}")
+                if analysis.get("processing_status") == "learning_only":
+                    database.log("Outlook", "INFO", "Verzonden bericht opgeslagen als leermodus", mail_data.get("subject"))
+                elif analysis.get("volgende_agent"):
+                    database.log(
+                        "Router",
+                        "INFO",
+                        "Mail gerouteerd naar volgende agent",
+                        f"{analysis.get('volgende_agent')} | {mail_data.get('subject')}",
+                    )
         except Exception as exc:
             failed += 1
             database.log("Database", "ERROR", "Database fout", str(exc))
@@ -433,8 +588,10 @@ def import_outlook_messages(mode: str = "poll") -> dict[str, int]:
         "Outlook",
         "INFO",
         "Mailbox scan afgerond",
-        f"batch={import_batch_id}; geimporteerd={imported}; duplicaten={duplicates}; fouten={failed}",
+        f"batch={import_batch_id}; geimporteerd={imported}; duplicaten={duplicates}; fouten={failed}; gerouteerd={routed_count}; menselijke_controle={human_review_count}",
     )
+    database.log("Router", "INFO", "Aantal mails gerouteerd naar volgende agent", str(routed_count))
+    database.log("Router", "INFO", "Aantal mails met menselijke controle", str(human_review_count))
     database.log("Dashboard", "INFO", "Dashboard bijgewerkt", f"nieuwe_mails={imported}")
     return {"imported": imported, "duplicates": duplicates, "failed": failed}
 

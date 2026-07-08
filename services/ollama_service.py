@@ -38,6 +38,8 @@ DEFAULT_ANALYSIS = {
     "voorgestelde_actie": "",
     "volgende_agent": "",
     "menselijke_controle_nodig": True,
+    "requires_human_review": True,
+    "reason_for_human_review": "",
     "redenen_voor_classificatie": [],
 }
 
@@ -91,6 +93,8 @@ class OllamaService:
         analysis["bijlagen"] = bool(has_attachments)
         analysis["samenvatting"] = "Analyse kon niet automatisch worden uitgevoerd."
         analysis["voorgestelde_actie"] = "Laat deze e-mail handmatig controleren."
+        analysis["requires_human_review"] = True
+        analysis["reason_for_human_review"] = reason
         analysis["redenen_voor_classificatie"] = [reason]
         return analysis
 
@@ -116,10 +120,18 @@ class OllamaService:
 
         if analysis["vertrouwen"] < 0.80:
             analysis["menselijke_controle_nodig"] = True
+            if not analysis.get("reason_for_human_review"):
+                analysis["reason_for_human_review"] = "Lage zekerheid in automatische classificatie."
         else:
             analysis["menselijke_controle_nodig"] = bool(
                 analysis.get("menselijke_controle_nodig", False)
             )
+        analysis["requires_human_review"] = bool(analysis["menselijke_controle_nodig"])
+        if analysis["categorie"] == "ONBEKEND":
+            analysis["menselijke_controle_nodig"] = True
+            analysis["requires_human_review"] = True
+            if not analysis.get("reason_for_human_review"):
+                analysis["reason_for_human_review"] = "Categorie onbekend."
 
         analysis["bijlagen"] = bool(analysis.get("bijlagen", False))
         if not isinstance(analysis.get("redenen_voor_classificatie"), list):
@@ -149,6 +161,8 @@ Kies exact een categorie uit:
 {categories}
 
 Te analyseren e-mail:
+Richting: {mail_data.get("direction", "incoming")}
+Bronmap: {mail_data.get("source_folder", "unknown")}
 Afzender: {mail_data.get("sender", "")}
 Ontvanger: {mail_data.get("recipient", "")}
 Onderwerp: {mail_data.get("subject", "")}
@@ -157,4 +171,7 @@ Bijlagennamen: {mail_data.get("attachment_names", "")}
 
 Tekst:
 {mail_data.get("body", "")}
+
+Vul altijd samenvatting, voorgestelde_actie, volgende_agent, requires_human_review en reason_for_human_review.
+Menselijke controle is alleen nodig bij lage zekerheid, risico, ontbrekende gegevens of ONBEKEND.
 """.strip()

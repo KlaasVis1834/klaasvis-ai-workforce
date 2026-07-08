@@ -21,7 +21,9 @@
                         <th>Ontvanger</th>
                         <th>Onderwerp</th>
                         <th>Categorie</th>
-                        <th>Prioriteit</th>
+                        <th>Status</th>
+                        <th>Vervolgstap</th>
+                        <th>Volgende agent</th>
                         <th>Controle</th>
                     </tr>
                 </thead>
@@ -34,15 +36,50 @@
                             <td>{{ item.recipient or "-" }}</td>
                             <td>{{ item.subject or "-" }}</td>
                             <td><span class="pill amber">{{ item.category or "ONBEKEND" }}</span></td>
-                            <td>{{ item.priority or "normaal" }}</td>
-                            <td>{{ "Ja" if item.human_review_required else "Nee" }}</td>
+                            <td><span class="pill cyan">{{ item.processing_status or "new" }}</span></td>
+                            <td>{{ item.suggested_action or item.summary or "-" }}</td>
+                            <td>{{ item.next_agent or "-" }}</td>
+                            <td>{{ "Ja" if item.requires_human_review or item.human_review_required else "Nee" }}</td>
                         </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
     {% else %}
-        <p class="empty">Nog geen mailanalyses opgeslagen.</p>
+        <p class="empty">Nog geen inkomende Inbox-mails verwerkt.</p>
     {% endif %}
 </section>
+
+{% if stats.latest_learning %}
+<section class="panel">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">Leermodus</p>
+            <h2>Verzonden berichten</h2>
+        </div>
+    </div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Tijd</th>
+                    <th>Ontvangen</th>
+                    <th>Onderwerp</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in stats.latest_learning %}
+                    <tr>
+                        <td class="mono">{{ item.created_at }}</td>
+                        <td class="mono">{{ item.received_at or "-" }}</td>
+                        <td>{{ item.subject or "-" }}</td>
+                        <td>{{ item.processing_status }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endif %}
 {% endblock %}

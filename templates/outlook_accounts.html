@@ -34,8 +34,13 @@
         {% if outlook_status.connected %}
             <div class="button-row">
                 <form method="post" action="{{ url_for('outlook_sync_account', account_id=allowed_outlook_email) }}">
-                    <button type="submit"><i class="ti ti-refresh"></i>Synchroniseer nu</button>
+                    <button type="submit"><i class="ti ti-inbox"></i>Synchroniseer Inbox nu</button>
                 </form>
+                {% if sent_learning_enabled %}
+                    <form method="post" action="{{ url_for('outlook_sent_learning', account_id=allowed_outlook_email) }}">
+                        <button class="secondary" type="submit"><i class="ti ti-school"></i>Scan Verzonden voor leermodus</button>
+                    </form>
+                {% endif %}
                 <form method="post" action="{{ url_for('outlook_disconnect_account', account_id=allowed_outlook_email) }}">
                     <button class="danger" type="submit"><i class="ti ti-plug-off"></i>Ontkoppel account</button>
                 </form>
@@ -55,6 +60,8 @@
         <dl class="result-list">
             <div><dt>Mail Agent</dt><dd>{{ "Online" if monitor_status.running else "Offline" }}</dd></div>
             <div><dt>Mailbox</dt><dd>{{ allowed_outlook_email or "-" }}</dd></div>
+            <div><dt>Hoofdbron</dt><dd>Inbox</dd></div>
+            <div><dt>Verzonden leermodus</dt><dd>{{ "Aan" if sent_learning_enabled else "Uit" }}</dd></div>
             <div><dt>Scan interval</dt><dd>15 seconden</dd></div>
             <div><dt>Laatste synchronisatie</dt><dd>{{ monitor_status.last_sync or "-" }}</dd></div>
             <div><dt>Laatste mailbox scan</dt><dd>{{ monitor_status.last_scan or "-" }}</dd></div>
@@ -65,8 +72,8 @@
     <article class="panel wide">
         <div class="panel-header">
             <div>
-                <p class="eyebrow">Outlook analyses</p>
-                <h2>Laatste verwerkte mails</h2>
+                <p class="eyebrow">Inbox analyses</p>
+                <h2>Laatste inkomende mails</h2>
             </div>
         </div>
         {% if latest_imports %}
@@ -79,7 +86,8 @@
                             <th>Afzender</th>
                             <th>Onderwerp</th>
                             <th>Categorie</th>
-                            <th>Vertrouwen</th>
+                            <th>Status</th>
+                            <th>Volgende agent</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -90,14 +98,15 @@
                                 <td>{{ item.sender }}</td>
                                 <td>{{ item.subject }}</td>
                                 <td><span class="pill amber">{{ item.category }}</span></td>
-                                <td>{{ "%.0f"|format((item.confidence or 0) * 100) }}%</td>
+                                <td>{{ item.processing_status }}</td>
+                                <td>{{ item.next_agent or "-" }}</td>
                             </tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
         {% else %}
-            <p class="empty">Nog geen Outlook-mails verwerkt.</p>
+            <p class="empty">Nog geen Inbox-mails verwerkt.</p>
         {% endif %}
     </article>
 </section>

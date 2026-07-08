@@ -30,6 +30,9 @@ class Database:
                     message_id TEXT,
                     internet_message_id TEXT,
                     conversation_id TEXT,
+                    source_folder TEXT DEFAULT 'unknown',
+                    processing_status TEXT DEFAULT 'new',
+                    direction TEXT DEFAULT 'incoming',
                     source_hash TEXT,
                     import_batch_id TEXT,
                     sender TEXT,
@@ -54,6 +57,8 @@ class Database:
                     suggested_action TEXT,
                     next_agent TEXT,
                     human_review_required INTEGER,
+                    requires_human_review INTEGER,
+                    reason_for_human_review TEXT,
                     raw_json TEXT
                 )
                 """
@@ -83,9 +88,15 @@ class Database:
             "message_id": "ALTER TABLE mail_analyses ADD COLUMN message_id TEXT",
             "internet_message_id": "ALTER TABLE mail_analyses ADD COLUMN internet_message_id TEXT",
             "conversation_id": "ALTER TABLE mail_analyses ADD COLUMN conversation_id TEXT",
+            "source_folder": "ALTER TABLE mail_analyses ADD COLUMN source_folder TEXT DEFAULT 'unknown'",
+            "processing_status": "ALTER TABLE mail_analyses ADD COLUMN processing_status TEXT DEFAULT 'new'",
+            "direction": "ALTER TABLE mail_analyses ADD COLUMN direction TEXT DEFAULT 'incoming'",
             "source_hash": "ALTER TABLE mail_analyses ADD COLUMN source_hash TEXT",
             "import_batch_id": "ALTER TABLE mail_analyses ADD COLUMN import_batch_id TEXT",
             "attachment_metadata": "ALTER TABLE mail_analyses ADD COLUMN attachment_metadata TEXT",
+            "next_agent": "ALTER TABLE mail_analyses ADD COLUMN next_agent TEXT",
+            "requires_human_review": "ALTER TABLE mail_analyses ADD COLUMN requires_human_review INTEGER",
+            "reason_for_human_review": "ALTER TABLE mail_analyses ADD COLUMN reason_for_human_review TEXT",
         }
         for column, statement in migrations.items():
             if column not in existing_columns:
@@ -121,13 +132,14 @@ class Database:
                 """
                 INSERT INTO mail_analyses (
                     created_at, source, received_at, message_id, internet_message_id, conversation_id,
-                    source_hash, import_batch_id, sender, recipient, subject, body, has_attachments,
+                    source_folder, processing_status, direction, source_hash, import_batch_id,
+                    sender, recipient, subject, body, has_attachments,
                     attachment_names, attachment_metadata, category, confidence, priority, sender_type,
                     insurer, customer_name, relation_number, policy_number,
                     claim_number, license_plate, amount, summary, suggested_action,
-                    next_agent, human_review_required, raw_json
+                    next_agent, human_review_required, requires_human_review, reason_for_human_review, raw_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     datetime.now().isoformat(timespec="seconds"),
@@ -136,6 +148,9 @@ class Database:
                     mail_data.get("message_id"),
                     mail_data.get("internet_message_id"),
                     mail_data.get("conversation_id"),
+                    mail_data.get("source_folder", "unknown"),
+                    analysis.get("processing_status", "new"),
+                    mail_data.get("direction", "incoming"),
                     source_hash,
                     mail_data.get("import_batch_id"),
                     mail_data.get("sender"),
@@ -160,6 +175,8 @@ class Database:
                     analysis.get("voorgestelde_actie"),
                     analysis.get("volgende_agent"),
                     int(bool(analysis.get("menselijke_controle_nodig"))),
+                    int(bool(analysis.get("requires_human_review", analysis.get("menselijke_controle_nodig")))),
+                    analysis.get("reason_for_human_review"),
                     json.dumps(analysis, ensure_ascii=False),
                 ),
             )
@@ -209,9 +226,16 @@ class Database:
     def dashboard_stats(self) -> dict[str, Any]:
         today = datetime.now().date().isoformat()
         with self.connect() as connection:
-            total = connection.execute("SELECT COUNT(*) FROM mail_analyses").fetchone()[0]
+            queue_filter = """
+                source_folder = 'inbox'
+                AND direction = 'incoming'
+                AND processing_status IN ('new', 'routed', 'needs_human')
+            """
+            total = connection.execute(
+                f"SELECT COUNT(*) FROM mail_analyses WHERE {queue_filter}"
+            ).fetchone()[0]
             today_total = connection.execute(
-                "SELECT COUNT(*) FROM mail_analyses WHERE created_at LIKE ?",
+                f"SELECT COUNT(*) FROM mail_analyses WHERE {queue_filter} AND created_at LIKE ?",
                 (f"{today}%",),
             ).fetchone()[0]
             error_total = connection.execute(
@@ -221,15 +245,21 @@ class Database:
                 """
                 SELECT category, COUNT(*) AS count
                 FROM mail_analyses
+                WHERE source_folder = 'inbox' AND direction = 'incoming'
                 GROUP BY category
                 ORDER BY count DESC, category ASC
                 """
             ).fetchall()
             latest = connection.execute(
                 """
-                SELECT id, created_at, source, received_at, sender, subject, category,
-                       confidence, human_review_required, import_batch_id
+                SELECT id, created_at, source, source_folder, processing_status, direction,
+                       received_at, sender, subject, category, confidence, summary,
+                       suggested_action, next_agent, human_review_required,
+                       requires_human_review, reason_for_human_review, import_batch_id
                 FROM mail_analyses
+                WHERE source_folder = 'inbox'
+                  AND direction = 'incoming'
+                  AND processing_status IN ('new', 'routed', 'needs_human')
                 ORDER BY id DESC
                 LIMIT 10
                 """
@@ -245,9 +275,23 @@ class Database:
             latest_imports = connection.execute(
                 """
                 SELECT id, created_at, source, received_at, sender, subject, category,
-                       confidence, import_batch_id
+                       confidence, source_folder, processing_status, direction, next_agent, import_batch_id
                 FROM mail_analyses
                 WHERE source = 'Outlook'
+                  AND source_folder = 'inbox'
+                  AND direction = 'incoming'
+                ORDER BY id DESC
+                LIMIT 10
+                """
+            ).fetchall()
+            latest_learning = connection.execute(
+                """
+                SELECT id, created_at, source, received_at, sender, subject, category,
+                       confidence, source_folder, processing_status, direction, import_batch_id
+                FROM mail_analyses
+                WHERE source = 'Outlook'
+                  AND source_folder = 'sentitems'
+                  AND direction = 'outgoing'
                 ORDER BY id DESC
                 LIMIT 10
                 """
@@ -269,6 +313,7 @@ class Database:
             "latest_analyses": [dict(row) for row in latest],
             "sources": [dict(row) for row in sources],
             "latest_imports": [dict(row) for row in latest_imports],
+            "latest_learning": [dict(row) for row in latest_learning],
             "latest_errors": [dict(row) for row in latest_errors],
         }
 
@@ -277,8 +322,30 @@ class Database:
             rows = connection.execute(
                 """
                 SELECT id, created_at, source, received_at, sender, recipient, subject,
-                       category, confidence, priority, human_review_required, summary
+                       source_folder, processing_status, direction, category, confidence, priority,
+                       suggested_action, next_agent, human_review_required, requires_human_review,
+                       reason_for_human_review, summary
                 FROM mail_analyses
+                WHERE source_folder = 'inbox'
+                  AND direction = 'incoming'
+                  AND processing_status IN ('new', 'routed', 'needs_human')
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def learning_mail_analyses(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, created_at, source, received_at, sender, recipient, subject,
+                       source_folder, processing_status, direction, category, confidence,
+                       priority, summary
+                FROM mail_analyses
+                WHERE source_folder = 'sentitems'
+                  AND direction = 'outgoing'
                 ORDER BY id DESC
                 LIMIT ?
                 """,

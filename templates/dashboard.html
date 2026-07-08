@@ -46,8 +46,8 @@
     <article class="panel wide">
         <div class="panel-header">
             <div>
-                <p class="eyebrow">Analyseoverzicht</p>
-                <h2>Laatste echte analyses</h2>
+                <p class="eyebrow">Inbox verwerkingsqueue</p>
+                <h2>Inkomende e-mails</h2>
             </div>
             <a href="{{ url_for('mail_analyses') }}" class="text-link">Alle analyses</a>
         </div>
@@ -57,11 +57,12 @@
                     <thead>
                         <tr>
                             <th>Tijd</th>
-                            <th>Bron</th>
                             <th>Afzender</th>
                             <th>Onderwerp</th>
                             <th>Categorie</th>
-                            <th>Vertrouwen</th>
+                            <th>Status</th>
+                            <th>Vervolgstap</th>
+                            <th>Volgende agent</th>
                             <th>Controle</th>
                         </tr>
                     </thead>
@@ -69,19 +70,20 @@
                         {% for item in stats.latest_analyses %}
                             <tr>
                                 <td class="mono">{{ item.created_at }}</td>
-                                <td><span class="pill cyan">{{ item.source or "Onbekend" }}</span></td>
                                 <td>{{ item.sender or "-" }}</td>
                                 <td>{{ item.subject or "-" }}</td>
                                 <td><span class="pill amber">{{ item.category or "ONBEKEND" }}</span></td>
-                                <td>{{ "%.0f"|format((item.confidence or 0) * 100) }}%</td>
-                                <td>{{ "Ja" if item.human_review_required else "Nee" }}</td>
+                                <td><span class="pill cyan">{{ item.processing_status or "new" }}</span></td>
+                                <td>{{ item.suggested_action or item.summary or "-" }}</td>
+                                <td>{{ item.next_agent or "-" }}</td>
+                                <td>{{ "Ja" if item.requires_human_review or item.human_review_required else "Nee" }}</td>
                             </tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
         {% else %}
-            <p class="empty">Nog geen analyses opgeslagen.</p>
+            <p class="empty">Nog geen inkomende Inbox-mails in de verwerkingsqueue.</p>
         {% endif %}
     </article>
 
