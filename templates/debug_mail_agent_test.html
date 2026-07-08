@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Mail Agent Test - Klaas Vis AI Workforce{% endblock %}
+{% block content %}
+<section class="hero-bar">
+    <div>
+        <p class="eyebrow">Debug</p>
+        <h1>Mail Agent test</h1>
+    </div>
+</section>
+
+<section class="dashboard-grid">
+    <article class="panel">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Veilige testtekst</p>
+                <h2>Scenario kiezen</h2>
+            </div>
+        </div>
+        <form method="post" class="form-stack">
+            <label for="scenario">Scenario</label>
+            <select id="scenario" name="scenario">
+                {% for key, text in examples.items() %}
+                    <option value="{{ key }}" {{ "selected" if key == selected else "" }}>{{ key }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit"><i class="ti ti-brain"></i>Analyseer met Ollama</button>
+        </form>
+        <p class="empty">Deze debugtest wordt niet opgeslagen als echte mailanalyse.</p>
+    </article>
+
+    <article class="panel wide">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">AI-output</p>
+                <h2>Resultaat</h2>
+            </div>
+        </div>
+        {% if result %}
+            <dl class="result-list">
+                <div><dt>Categorie</dt><dd>{{ result.categorie }}</dd></div>
+                <div><dt>Vertrouwen</dt><dd>{{ "%.0f"|format((result.vertrouwen_score or result.vertrouwen or 0) * 100) }}%</dd></div>
+                <div><dt>Status</dt><dd>{{ result.processing_status }}</dd></div>
+                <div><dt>Volgende agent</dt><dd>{{ result.volgende_agent or "-" }}</dd></div>
+                <div><dt>Menselijke controle</dt><dd>{{ "Ja" if result.requires_human_review else "Nee" }}</dd></div>
+                <div><dt>Reden</dt><dd>{{ result.reason_for_human_review or "-" }}</dd></div>
+            </dl>
+            <pre class="json-output">{{ result | tojson(indent=2) }}</pre>
+        {% else %}
+            <p class="empty">Nog geen test uitgevoerd.</p>
+        {% endif %}
+    </article>
+</section>
+{% endblock %}

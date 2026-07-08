@@ -4,6 +4,7 @@ import base64
 import hashlib
 import secrets
 import time
+from datetime import datetime, timezone
 from html import unescape
 from typing import Any
 from urllib.parse import urlencode
@@ -98,6 +99,32 @@ class MicrosoftGraphService:
     def save_authorized_token(self, token_data: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
         return self._save_token_response(token_data, profile)
 
+    def sync_started_at(self) -> str | None:
+        token = self.token_store.load() or {}
+        return token.get("sync_started_at")
+
+    def last_sync_at(self) -> str | None:
+        token = self.token_store.load() or {}
+        return token.get("last_sync_at")
+
+    def inbox_sync_anchor(self) -> str:
+        token = self.token_store.load() or {}
+        anchor = token.get("last_sync_at") or token.get("sync_started_at")
+        if anchor:
+            return anchor
+        anchor = self._now_utc()
+        token["sync_started_at"] = anchor
+        token["last_sync_at"] = anchor
+        self.token_store.save(token)
+        return anchor
+
+    def update_last_sync_at(self, value: str | None = None) -> None:
+        token = self.token_store.load() or {}
+        token["last_sync_at"] = value or self._now_utc()
+        if not token.get("sync_started_at"):
+            token["sync_started_at"] = token["last_sync_at"]
+        self.token_store.save(token)
+
     def refresh_access_token(self) -> dict[str, Any] | None:
         token = self.token_store.load()
         if not token or not token.get("refresh_token"):
@@ -154,17 +181,23 @@ class MicrosoftGraphService:
     def fetch_messages(self, mode: str = "poll") -> list[dict[str, Any]]:
         return self.fetch_inbox_messages(mode)
 
-    def fetch_inbox_messages(self, mode: str = "poll") -> list[dict[str, Any]]:
-        return self._fetch_folder_messages("inbox", "incoming", mode)
+    def fetch_inbox_messages(self, mode: str = "poll", since: str | None = None) -> list[dict[str, Any]]:
+        return self._fetch_folder_messages("inbox", "incoming", mode, since)
 
     def fetch_sent_learning_messages(self, mode: str = "learning") -> list[dict[str, Any]]:
         return self._fetch_folder_messages("sentitems", "outgoing", mode)
 
-    def _fetch_folder_messages(self, folder: str, direction: str, mode: str = "poll") -> list[dict[str, Any]]:
+    def _fetch_folder_messages(
+        self,
+        folder: str,
+        direction: str,
+        mode: str = "poll",
+        since: str | None = None,
+    ) -> list[dict[str, Any]]:
         top = 25 if mode == "poll" else 10
         params = {
             "$top": str(top),
-            "$orderby": "receivedDateTime desc",
+            "$orderby": "receivedDateTime asc",
             "$select": ",".join(
                 [
                     "id",
@@ -181,6 +214,8 @@ class MicrosoftGraphService:
                 ]
             ),
         }
+        if since and folder == "inbox":
+            params["$filter"] = f"receivedDateTime ge {since}"
         response = self._graph_get(
             f"/me/mailFolders/{folder}/messages?{urlencode(params)}",
             headers={"Prefer": 'outlook.body-content-type="text"'},
@@ -270,11 +305,17 @@ class MicrosoftGraphService:
                 "display_name": profile.get("displayName"),
                 "mail": profile.get("mail") or profile.get("userPrincipalName"),
             }
+            sync_started_at = self._now_utc()
+            merged["sync_started_at"] = sync_started_at
+            merged["last_sync_at"] = sync_started_at
         self.token_store.save(merged)
         return merged
 
     def _authority_url(self) -> str:
         return f"https://login.microsoftonline.com/{self.tenant_id}"
+
+    def _now_utc(self) -> str:
+        return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def create_pkce_pair() -> tuple[str, str]:

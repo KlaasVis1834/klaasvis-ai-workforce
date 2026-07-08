@@ -63,6 +63,7 @@ AGENT_ROUTING = {
     "SCHADE_UITKERING": "Schade Agent",
     "WIJZIGING": "Polis Agent",
     "BEËINDIGING": "Polis Agent",
+    "BEËINDIGING": "Polis Agent",
     "BEÃ‹INDIGING": "Polis Agent",
     "BEEINDIGING": "Polis Agent",
     "POLISDOCUMENT": "Document Agent",
@@ -143,10 +144,15 @@ def route_mail_analysis(mail_data: dict, analysis: dict) -> dict:
     if category == "BEEINDIGING":
         category = "BEËINDIGING"
     routed["categorie"] = category
+    if category.startswith("BE") and "INDIGING" in category:
+        category = "BEËINDIGING"
+        routed["categorie"] = category
 
     source_folder = str(mail_data.get("source_folder") or "unknown").lower()
     direction = str(mail_data.get("direction") or "incoming").lower()
-    confidence = float(routed.get("vertrouwen") or 0.0)
+    confidence = float(routed.get("vertrouwen_score", routed.get("vertrouwen", 0.0)) or 0.0)
+    routed["vertrouwen_score"] = confidence
+    routed["vertrouwen"] = confidence
 
     if source_folder == "sentitems" or direction == "outgoing":
         routed["processing_status"] = "learning_only"
@@ -154,10 +160,30 @@ def route_mail_analysis(mail_data: dict, analysis: dict) -> dict:
         routed["menselijke_controle_nodig"] = False
         routed["requires_human_review"] = False
         routed["reason_for_human_review"] = ""
+        routed["reden_menselijke_controle"] = ""
+        return routed
+
+    if routed.get("processing_status") == "ai_unavailable":
+        routed["volgende_agent"] = "Human Review"
+        routed["requires_human_review"] = True
+        routed["menselijke_controle_nodig"] = True
+        routed["reason_for_human_review"] = routed.get("reason_for_human_review") or "Ollama is niet beschikbaar."
+        routed["reden_menselijke_controle"] = routed["reason_for_human_review"]
+        routed["routed_at"] = datetime.now().isoformat(timespec="seconds")
+        return routed
+
+    if category == "SPAM_OF_ONBELANGRIJK":
+        routed["volgende_agent"] = ""
+        routed["requires_human_review"] = False
+        routed["menselijke_controle_nodig"] = False
+        routed["reason_for_human_review"] = ""
+        routed["reden_menselijke_controle"] = ""
+        routed["processing_status"] = "ignored"
+        routed["routed_at"] = datetime.now().isoformat(timespec="seconds")
         return routed
 
     next_agent = AGENT_ROUTING.get(category, "")
-    risky = confidence < 0.80 or category == "ONBEKEND" or not next_agent
+    risky = confidence < 0.80 or category == "ONBEKEND" or category == "BEËINDIGING" or not next_agent
     model_requested_review = bool(
         routed.get("requires_human_review", routed.get("menselijke_controle_nodig", False))
     )
@@ -169,6 +195,8 @@ def route_mail_analysis(mail_data: dict, analysis: dict) -> dict:
         reasons = []
         if category == "ONBEKEND":
             reasons.append("Categorie onbekend.")
+        if category == "BEËINDIGING":
+            reasons.append("Beëindiging vereist menselijke controle.")
         if confidence < 0.80:
             reasons.append("Lage zekerheid in automatische classificatie.")
         if not next_agent:
@@ -176,10 +204,13 @@ def route_mail_analysis(mail_data: dict, analysis: dict) -> dict:
         if routed.get("reason_for_human_review"):
             reasons.append(str(routed["reason_for_human_review"]))
         routed["reason_for_human_review"] = " ".join(dict.fromkeys(reasons)) or "Menselijke controle vereist."
+        routed["reden_menselijke_controle"] = routed["reason_for_human_review"]
         routed["processing_status"] = "needs_human"
     else:
         routed["reason_for_human_review"] = ""
+        routed["reden_menselijke_controle"] = ""
         routed["processing_status"] = "routed" if next_agent else "new"
+    routed["routed_at"] = datetime.now().isoformat(timespec="seconds")
     return routed
 
 
@@ -344,6 +375,64 @@ def debug_outlook_config():
     return render_template("debug_outlook_config.html", config=config)
 
 
+@app.route("/debug/ollama", methods=["GET", "POST"])
+def debug_ollama():
+    status = ollama_service.status()
+    test_result = None
+    if request.method == "POST":
+        test_result = ollama_service.test_prompt()
+        database.log(
+            "Ollama",
+            "INFO" if test_result.get("ok") else "ERROR",
+            "Ollama debug test uitgevoerd",
+            f"status={test_result.get('status')}; latency_ms={test_result.get('latency_ms')}; error={test_result.get('last_error')}",
+        )
+    return render_template(
+        "debug_ollama.html",
+        status=status,
+        test_result=test_result,
+    )
+
+
+@app.route("/debug/mail-agent-test", methods=["GET", "POST"])
+def debug_mail_agent_test():
+    examples = {
+        "herbouwwaardemeter": "Klant vraagt om een herbouwwaardemeter voor de woning vanwege een nieuwe hypotheek.",
+        "schade_uitkering": "Klant vraagt wanneer de schade-uitkering wordt betaald en noemt schadenummer S-12345.",
+        "poliswijziging": "Klant wil het kenteken op de autoverzekering wijzigen naar AB-123-C.",
+        "beeindiging": "Klant vraagt de woonverzekering per volgende maand te beëindigen.",
+        "onbekend": "Klant stuurt een onduidelijke vraag zonder polisnummer of concrete opdracht.",
+    }
+    result = None
+    selected = request.form.get("scenario", "herbouwwaardemeter")
+    if request.method == "POST":
+        body = examples.get(selected, examples["onbekend"])
+        mail_data = {
+            "source": "Debug",
+            "source_folder": "inbox",
+            "direction": "incoming",
+            "sender": "debug@klaasvis.local",
+            "recipient": ALLOWED_OUTLOOK_EMAIL,
+            "subject": f"Debug scenario: {selected}",
+            "body": body,
+            "has_attachments": False,
+            "attachment_names": "",
+        }
+        result = route_mail_analysis(mail_data, mail_agent.run(mail_data))
+        database.log(
+            "Mail Intake Agent",
+            "INFO",
+            "Debug mail-agent-test uitgevoerd",
+            f"scenario={selected}; categorie={result.get('categorie')}; status={result.get('processing_status')}",
+        )
+    return render_template(
+        "debug_mail_agent_test.html",
+        examples=examples,
+        selected=selected,
+        result=result,
+    )
+
+
 @app.route("/outlook/connect")
 def microsoft_login():
     if not graph_service.configured:
@@ -439,8 +528,8 @@ def microsoft_callback():
         database.log("Outlook", "INFO", "Outlook verbonden")
         database.log("Outlook", "INFO", "Toegestaan Outlook-account gekoppeld", login_email)
         database.log("Outlook", "INFO", "OAuth OK")
-        mailbox_monitor.run_once()
-        flash("Outlook is verbonden.", "success")
+        database.log("Outlook", "INFO", "Sync startmoment opgeslagen", graph_service.sync_started_at())
+        flash("Outlook gekoppeld. Alleen nieuwe inkomende berichten vanaf nu worden verwerkt.", "success")
     except Exception as exc:
         database.log("Outlook OAuth", "ERROR", "Graph /me mislukt", str(exc))
         database.log("Outlook", "ERROR", "Microsoft Graph profiel ophalen mislukt", str(exc))
@@ -533,7 +622,9 @@ def import_outlook_messages(mode: str = "poll") -> dict[str, int]:
         database.log("Outlook", "INFO", "Graph OK", f"{len(messages)} sentitems opgehaald voor leermodus")
     else:
         database.log("Outlook", "INFO", "Inbox sync gestart")
-        messages = graph_service.fetch_inbox_messages(mode)
+        sync_anchor = graph_service.inbox_sync_anchor()
+        database.log("Outlook", "INFO", "Inbox sync anchor", sync_anchor)
+        messages = graph_service.fetch_inbox_messages(mode, since=sync_anchor)
         database.log("Outlook", "INFO", "Aantal inbox mails opgehaald", str(len(messages)))
         messages, skipped_by_reset = filter_messages_after_reset(messages)
         if skipped_by_reset:
@@ -544,8 +635,10 @@ def import_outlook_messages(mode: str = "poll") -> dict[str, int]:
     failed = 0
     routed_count = 0
     human_review_count = 0
+    latest_received_at = None
 
     for mail_data in messages:
+        latest_received_at = mail_data.get("received_at") or latest_received_at
         database.log("Outlook", "INFO", "Mail opgehaald", mail_data.get("subject"))
         mail_data["import_batch_id"] = import_batch_id
         mail_data["source_hash"] = database.build_source_hash(mail_data)
@@ -555,8 +648,28 @@ def import_outlook_messages(mode: str = "poll") -> dict[str, int]:
             continue
 
         database.log("Mail Intake Agent", "INFO", "Mail ontvangen", mail_data.get("subject"))
+        database.log(
+            "Outlook",
+            "INFO",
+            "Nieuwe inboxmail gevonden",
+            f"outlook_message_id={mail_data.get('message_id')}; received_at={mail_data.get('received_at')}; source_folder={mail_data.get('source_folder')}",
+        )
         database.log("Mail Intake Agent", "INFO", "Ollama gestart", mail_data.get("internet_message_id"))
         analysis = route_mail_analysis(mail_data, mail_agent.run(mail_data))
+        database.log(
+            "Mail Intake Agent",
+            "INFO",
+            "AI analyse ontvangen",
+            (
+                f"model={analysis.get('ai_model')}; latency_ms={analysis.get('ai_latency_ms')}; "
+                f"parse={analysis.get('ai_parse_status')}; categorie={analysis.get('categorie')}; "
+                f"vertrouwen={analysis.get('vertrouwen_score', analysis.get('vertrouwen'))}; "
+                f"volgende_agent={analysis.get('volgende_agent')}; "
+                f"menselijke_controle={analysis.get('requires_human_review')}; "
+                f"processing_status={analysis.get('processing_status')}"
+            ),
+        )
+        database.log("Router", "INFO", "Routing bepaald", f"{analysis.get('processing_status')} -> {analysis.get('volgende_agent')}")
         if analysis.get("processing_status") == "routed":
             routed_count += 1
         if analysis.get("requires_human_review"):
@@ -592,6 +705,9 @@ def import_outlook_messages(mode: str = "poll") -> dict[str, int]:
     )
     database.log("Router", "INFO", "Aantal mails gerouteerd naar volgende agent", str(routed_count))
     database.log("Router", "INFO", "Aantal mails met menselijke controle", str(human_review_count))
+    if mode != "learning":
+        graph_service.update_last_sync_at(latest_received_at)
+        database.log("Outlook", "INFO", "Last sync bijgewerkt", latest_received_at or "nu")
     database.log("Dashboard", "INFO", "Dashboard bijgewerkt", f"nieuwe_mails={imported}")
     return {"imported": imported, "duplicates": duplicates, "failed": failed}
 

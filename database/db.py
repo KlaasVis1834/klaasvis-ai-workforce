@@ -27,6 +27,7 @@ class Database:
                     created_at TEXT NOT NULL,
                     source TEXT DEFAULT 'Handmatig',
                     received_at TEXT,
+                    outlook_message_id TEXT,
                     message_id TEXT,
                     internet_message_id TEXT,
                     conversation_id TEXT,
@@ -59,6 +60,11 @@ class Database:
                     human_review_required INTEGER,
                     requires_human_review INTEGER,
                     reason_for_human_review TEXT,
+                    ai_model TEXT,
+                    ai_raw_response TEXT,
+                    ai_parse_status TEXT,
+                    ai_latency_ms INTEGER,
+                    routed_at TEXT,
                     raw_json TEXT
                 )
                 """
@@ -85,6 +91,7 @@ class Database:
         migrations = {
             "source": "ALTER TABLE mail_analyses ADD COLUMN source TEXT DEFAULT 'Handmatig'",
             "received_at": "ALTER TABLE mail_analyses ADD COLUMN received_at TEXT",
+            "outlook_message_id": "ALTER TABLE mail_analyses ADD COLUMN outlook_message_id TEXT",
             "message_id": "ALTER TABLE mail_analyses ADD COLUMN message_id TEXT",
             "internet_message_id": "ALTER TABLE mail_analyses ADD COLUMN internet_message_id TEXT",
             "conversation_id": "ALTER TABLE mail_analyses ADD COLUMN conversation_id TEXT",
@@ -97,6 +104,11 @@ class Database:
             "next_agent": "ALTER TABLE mail_analyses ADD COLUMN next_agent TEXT",
             "requires_human_review": "ALTER TABLE mail_analyses ADD COLUMN requires_human_review INTEGER",
             "reason_for_human_review": "ALTER TABLE mail_analyses ADD COLUMN reason_for_human_review TEXT",
+            "ai_model": "ALTER TABLE mail_analyses ADD COLUMN ai_model TEXT",
+            "ai_raw_response": "ALTER TABLE mail_analyses ADD COLUMN ai_raw_response TEXT",
+            "ai_parse_status": "ALTER TABLE mail_analyses ADD COLUMN ai_parse_status TEXT",
+            "ai_latency_ms": "ALTER TABLE mail_analyses ADD COLUMN ai_latency_ms INTEGER",
+            "routed_at": "ALTER TABLE mail_analyses ADD COLUMN routed_at TEXT",
         }
         for column, statement in migrations.items():
             if column not in existing_columns:
@@ -131,20 +143,22 @@ class Database:
             cursor = connection.execute(
                 """
                 INSERT INTO mail_analyses (
-                    created_at, source, received_at, message_id, internet_message_id, conversation_id,
+                    created_at, source, received_at, outlook_message_id, message_id, internet_message_id, conversation_id,
                     source_folder, processing_status, direction, source_hash, import_batch_id,
                     sender, recipient, subject, body, has_attachments,
                     attachment_names, attachment_metadata, category, confidence, priority, sender_type,
                     insurer, customer_name, relation_number, policy_number,
                     claim_number, license_plate, amount, summary, suggested_action,
-                    next_agent, human_review_required, requires_human_review, reason_for_human_review, raw_json
+                    next_agent, human_review_required, requires_human_review, reason_for_human_review,
+                    ai_model, ai_raw_response, ai_parse_status, ai_latency_ms, routed_at, raw_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     datetime.now().isoformat(timespec="seconds"),
                     mail_data.get("source", "Handmatig"),
                     mail_data.get("received_at"),
+                    mail_data.get("outlook_message_id") or mail_data.get("message_id"),
                     mail_data.get("message_id"),
                     mail_data.get("internet_message_id"),
                     mail_data.get("conversation_id"),
@@ -177,6 +191,11 @@ class Database:
                     int(bool(analysis.get("menselijke_controle_nodig"))),
                     int(bool(analysis.get("requires_human_review", analysis.get("menselijke_controle_nodig")))),
                     analysis.get("reason_for_human_review"),
+                    analysis.get("ai_model"),
+                    analysis.get("ai_raw_response"),
+                    analysis.get("ai_parse_status"),
+                    analysis.get("ai_latency_ms"),
+                    analysis.get("routed_at"),
                     json.dumps(analysis, ensure_ascii=False),
                 ),
             )
@@ -229,7 +248,7 @@ class Database:
             queue_filter = """
                 source_folder = 'inbox'
                 AND direction = 'incoming'
-                AND processing_status IN ('new', 'routed', 'needs_human')
+                AND processing_status IN ('new', 'routed', 'needs_human', 'ai_unavailable')
             """
             total = connection.execute(
                 f"SELECT COUNT(*) FROM mail_analyses WHERE {queue_filter}"
@@ -255,11 +274,12 @@ class Database:
                 SELECT id, created_at, source, source_folder, processing_status, direction,
                        received_at, sender, subject, category, confidence, summary,
                        suggested_action, next_agent, human_review_required,
-                       requires_human_review, reason_for_human_review, import_batch_id
+                       requires_human_review, reason_for_human_review, ai_model,
+                       ai_parse_status, ai_latency_ms, import_batch_id
                 FROM mail_analyses
                 WHERE source_folder = 'inbox'
                   AND direction = 'incoming'
-                  AND processing_status IN ('new', 'routed', 'needs_human')
+                  AND processing_status IN ('new', 'routed', 'needs_human', 'ai_unavailable')
                 ORDER BY id DESC
                 LIMIT 10
                 """
@@ -275,7 +295,9 @@ class Database:
             latest_imports = connection.execute(
                 """
                 SELECT id, created_at, source, received_at, sender, subject, category,
-                       confidence, source_folder, processing_status, direction, next_agent, import_batch_id
+                       confidence, source_folder, processing_status, direction, next_agent,
+                       requires_human_review, reason_for_human_review, ai_parse_status,
+                       ai_latency_ms, import_batch_id
                 FROM mail_analyses
                 WHERE source = 'Outlook'
                   AND source_folder = 'inbox'
@@ -324,11 +346,11 @@ class Database:
                 SELECT id, created_at, source, received_at, sender, recipient, subject,
                        source_folder, processing_status, direction, category, confidence, priority,
                        suggested_action, next_agent, human_review_required, requires_human_review,
-                       reason_for_human_review, summary
+                       reason_for_human_review, summary, ai_model, ai_parse_status, ai_latency_ms
                 FROM mail_analyses
                 WHERE source_folder = 'inbox'
                   AND direction = 'incoming'
-                  AND processing_status IN ('new', 'routed', 'needs_human')
+                  AND processing_status IN ('new', 'routed', 'needs_human', 'ai_unavailable')
                 ORDER BY id DESC
                 LIMIT ?
                 """,

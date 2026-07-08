@@ -21,10 +21,13 @@
                         <th>Ontvanger</th>
                         <th>Onderwerp</th>
                         <th>Categorie</th>
+                        <th>Vertrouwen</th>
                         <th>Status</th>
+                        <th>Samenvatting</th>
                         <th>Vervolgstap</th>
                         <th>Volgende agent</th>
                         <th>Controle</th>
+                        <th>Reden controle</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -36,10 +39,13 @@
                             <td>{{ item.recipient or "-" }}</td>
                             <td>{{ item.subject or "-" }}</td>
                             <td><span class="pill amber">{{ item.category or "ONBEKEND" }}</span></td>
+                            <td>{{ "%.0f"|format((item.confidence or 0) * 100) }}%</td>
                             <td><span class="pill cyan">{{ item.processing_status or "new" }}</span></td>
-                            <td>{{ item.suggested_action or item.summary or "-" }}</td>
+                            <td>{{ item.summary or "-" }}</td>
+                            <td>{{ item.suggested_action or "-" }}</td>
                             <td>{{ item.next_agent or "-" }}</td>
                             <td>{{ "Ja" if item.requires_human_review or item.human_review_required else "Nee" }}</td>
+                            <td>{{ item.reason_for_human_review or "-" }}</td>
                         </tr>
                     {% endfor %}
                 </tbody>

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Ollama Debug - Klaas Vis AI Workforce{% endblock %}
+{% block content %}
+<section class="hero-bar">
+    <div>
+        <p class="eyebrow">Debug</p>
+        <h1>Ollama status</h1>
+    </div>
+    <form method="post">
+        <button type="submit"><i class="ti ti-player-play"></i>Test Ollama</button>
+    </form>
+</section>
+
+<section class="dashboard-grid">
+    <article class="panel">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Runtime</p>
+                <h2>Modelverbinding</h2>
+            </div>
+        </div>
+        <dl class="result-list">
+            <div><dt>Ollama online</dt><dd>{{ "ja" if status.online else "nee" }}</dd></div>
+            <div><dt>Base URL</dt><dd>{{ status.base_url }}</dd></div>
+            <div><dt>Model</dt><dd>{{ status.model }}</dd></div>
+            <div><dt>Model gevonden</dt><dd>{{ "ja" if status.model_found else "nee" }}</dd></div>
+            <div><dt>Reactietijd</dt><dd>{{ status.latency_ms }} ms</dd></div>
+            <div><dt>Laatste foutmelding</dt><dd>{{ status.last_error or "-" }}</dd></div>
+        </dl>
+    </article>
+
+    <article class="panel">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Testprompt</p>
+                <h2>JSON response</h2>
+            </div>
+        </div>
+        {% if test_result %}
+            <dl class="result-list">
+                <div><dt>Status</dt><dd>{{ test_result.status }}</dd></div>
+                <div><dt>Reactietijd</dt><dd>{{ test_result.latency_ms }} ms</dd></div>
+                <div><dt>Foutmelding</dt><dd>{{ test_result.last_error or "-" }}</dd></div>
+            </dl>
+            <pre class="json-output">{{ test_result.response | tojson(indent=2) }}</pre>
+        {% else %}
+            <p class="empty">Klik op Test Ollama om een JSON-testprompt naar het lokale model te sturen.</p>
+        {% endif %}
+    </article>
+</section>
+{% endblock %}

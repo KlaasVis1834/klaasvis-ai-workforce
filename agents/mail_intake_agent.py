@@ -10,8 +10,8 @@ class MailIntakeAgent(BaseAgent):
     def __init__(self, ollama_service: OllamaService, model: str) -> None:
         super().__init__(
             name="Mail Intake Agent",
-            version="0.1",
-            description="Analyseert handmatig ingevoerde e-mails en classificeert deze voor menselijke opvolging.",
+            version="0.3",
+            description="Analyseert nieuwe inkomende Outlook-mails via lokale Ollama en routeert naar de juiste volgende agent.",
             model=model,
         )
         self.ollama_service = ollama_service
