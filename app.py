@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import uuid
 from pathlib import Path
 
@@ -24,11 +25,18 @@ APP_SECRET_KEY = os.getenv("APP_SECRET_KEY", "change-this-secret").strip()
 MICROSOFT_TENANT_ID = os.getenv("MICROSOFT_TENANT_ID", "").strip()
 MICROSOFT_CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID", "").strip()
 MICROSOFT_CLIENT_SECRET = os.getenv("MICROSOFT_CLIENT_SECRET", "").strip()
-MICROSOFT_REDIRECT_URI = os.getenv("MICROSOFT_REDIRECT_URI", "").strip()
+EXPECTED_MICROSOFT_REDIRECT_URI = "http://localhost:5000/outlook/callback"
+MICROSOFT_REDIRECT_URI = os.getenv("MICROSOFT_REDIRECT_URI", EXPECTED_MICROSOFT_REDIRECT_URI).strip()
+if MICROSOFT_REDIRECT_URI != EXPECTED_MICROSOFT_REDIRECT_URI:
+    MICROSOFT_REDIRECT_URI = EXPECTED_MICROSOFT_REDIRECT_URI
 ALLOWED_OUTLOOK_EMAIL = os.getenv("ALLOWED_OUTLOOK_EMAIL", "").strip().lower()
 
 app = Flask(__name__)
 app.secret_key = APP_SECRET_KEY
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
 
 database = Database(DATABASE_PATH)
 database.initialize()
@@ -70,6 +78,7 @@ database.log(
         f"allowed_email={startup_yes_no(bool(ALLOWED_OUTLOOK_EMAIL))}"
     ),
 )
+database.log("Applicatie", "INFO", "Flask session secret loaded", startup_yes_no(bool(APP_SECRET_KEY)))
 
 
 def future_agents() -> list[dict]:
@@ -108,6 +117,15 @@ def route_exists(rule: str) -> bool:
 
 def yes_no(value: bool) -> str:
     return "ja" if value else "nee"
+
+
+def session_key_summary() -> str:
+    safe_keys = [
+        key
+        for key in session.keys()
+        if key in {"oauth_state", "oauth_code_verifier", "_flashes"}
+    ]
+    return ", ".join(sorted(safe_keys)) if safe_keys else "geen"
 
 
 @app.route("/")
@@ -228,12 +246,16 @@ def microsoft_login():
         flash("Vul eerst de Microsoft .env variabelen in, inclusief een echte client secret.", "error")
         return redirect(url_for("outlook_accounts"))
 
-    state = uuid.uuid4().hex
+    state = secrets.token_urlsafe(32)
     code_verifier, code_challenge = create_pkce_pair()
-    session["microsoft_oauth_state"] = state
-    session["microsoft_code_verifier"] = code_verifier
+    session["oauth_state"] = state
+    session["oauth_code_verifier"] = code_verifier
+    session.modified = True
     authorization_url = graph_service.auth_url(state, code_challenge)
     database.log("Outlook OAuth", "INFO", "Microsoft OAuth login gestart")
+    database.log("Outlook OAuth", "INFO", "State aangemaakt", yes_no(bool(state)))
+    database.log("Outlook OAuth", "INFO", "Session bevat oauth_state", yes_no(bool(session.get("oauth_state"))))
+    database.log("Outlook OAuth", "INFO", "Session keys aanwezig", session_key_summary())
     database.log("Outlook OAuth", "INFO", "Gebruikte tenant id", MICROSOFT_TENANT_ID)
     database.log("Outlook OAuth", "INFO", "Gebruikte client id gemaskeerd", mask_value(MICROSOFT_CLIENT_ID))
     database.log("Outlook OAuth", "INFO", "Gebruikte redirect uri", MICROSOFT_REDIRECT_URI)
@@ -247,8 +269,13 @@ def microsoft_callback():
     database.log("Outlook OAuth", "INFO", "Callback aangeroepen", "ja")
     code = request.args.get("code")
     database.log("Outlook OAuth", "INFO", "Code ontvangen", yes_no(bool(code)))
-    state_valid = request.args.get("state") == session.get("microsoft_oauth_state")
-    database.log("Outlook OAuth", "INFO", "State geldig", yes_no(state_valid))
+    returned_state = request.args.get("state")
+    expected_state = session.get("oauth_state")
+    database.log("Outlook OAuth", "INFO", "Callback state ontvangen", yes_no(bool(returned_state)))
+    database.log("Outlook OAuth", "INFO", "Session bevat oauth_state", yes_no(bool(expected_state)))
+    database.log("Outlook OAuth", "INFO", "Session keys aanwezig", session_key_summary())
+    state_valid = bool(returned_state and expected_state and returned_state == expected_state)
+    database.log("Outlook OAuth", "INFO", "State match", yes_no(state_valid))
 
     error = request.args.get("error")
     if error:
@@ -259,13 +286,23 @@ def microsoft_callback():
 
     if not state_valid:
         database.log("Outlook", "ERROR", "Microsoft OAuth state ongeldig")
-        flash("Microsoft login afgebroken: ongeldige sessiestatus.", "error")
+        flash(
+            "Microsoft login afgebroken: ongeldige sessiestatus. "
+            f"State ontvangen: {yes_no(bool(returned_state))}; sessie bevat state: {yes_no(bool(expected_state))}.",
+            "error",
+        )
+        session.pop("oauth_state", None)
+        session.pop("oauth_code_verifier", None)
         return redirect(url_for("outlook_accounts"))
 
-    code_verifier = session.get("microsoft_code_verifier")
+    session.pop("oauth_state", None)
+    session.modified = True
+
+    code_verifier = session.get("oauth_code_verifier")
     if not code or not code_verifier:
         database.log("Outlook", "ERROR", "Microsoft OAuth callback zonder code")
         flash("Microsoft login gaf geen autorisatiecode terug.", "error")
+        session.pop("oauth_code_verifier", None)
         return redirect(url_for("outlook_accounts"))
 
     try:
@@ -276,8 +313,7 @@ def microsoft_callback():
         database.log("Outlook OAuth", "ERROR", "Token exchange mislukt", str(exc))
         database.log("Outlook", "ERROR", "Microsoft token ophalen mislukt", str(exc))
         flash(f"Outlook verbinden is mislukt: {exc}", "error")
-        session.pop("microsoft_oauth_state", None)
-        session.pop("microsoft_code_verifier", None)
+        session.pop("oauth_code_verifier", None)
         return redirect(url_for("outlook_accounts"))
 
     try:
@@ -305,8 +341,8 @@ def microsoft_callback():
         database.log("Outlook", "ERROR", "Microsoft Graph profiel ophalen mislukt", str(exc))
         flash(f"Outlook verbinden is mislukt: {exc}", "error")
     finally:
-        session.pop("microsoft_oauth_state", None)
-        session.pop("microsoft_code_verifier", None)
+        session.pop("oauth_state", None)
+        session.pop("oauth_code_verifier", None)
 
     return redirect(url_for("outlook_accounts"))
 
