@@ -6,11 +6,7 @@ from pathlib import Path
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import HTTPException
-try:
-    from dotenv import load_dotenv
-except ImportError:
-    def load_dotenv() -> bool:
-        return False
+from dotenv import load_dotenv
 
 from agents import MailIntakeAgent
 from database import Database
@@ -18,20 +14,17 @@ from services import MailboxMonitor, MicrosoftGraphService, OllamaService, Token
 from services.microsoft_graph_service import create_pkce_pair
 
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env", override=True)
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
-DATABASE_PATH = os.getenv("DATABASE_PATH", "database/klaasvis_ai.db")
-APP_SECRET_KEY = os.getenv("APP_SECRET_KEY", "change-this-secret")
-MICROSOFT_TENANT_ID = os.getenv("MICROSOFT_TENANT_ID", "")
-MICROSOFT_CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID", "")
-MICROSOFT_CLIENT_SECRET = os.getenv("MICROSOFT_CLIENT_SECRET", "")
-MICROSOFT_REDIRECT_URI = os.getenv(
-    "MICROSOFT_REDIRECT_URI",
-    "http://localhost:5000/auth/microsoft/callback",
-)
-MICROSOFT_TOKEN_PATH = os.getenv("MICROSOFT_TOKEN_PATH", "database/microsoft_token.json")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip()
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b").strip()
+DATABASE_PATH = os.getenv("DATABASE_PATH", "database/klaasvis_ai.db").strip()
+APP_SECRET_KEY = os.getenv("APP_SECRET_KEY", "change-this-secret").strip()
+MICROSOFT_TENANT_ID = os.getenv("MICROSOFT_TENANT_ID", "").strip()
+MICROSOFT_CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID", "").strip()
+MICROSOFT_CLIENT_SECRET = os.getenv("MICROSOFT_CLIENT_SECRET", "").strip()
+MICROSOFT_REDIRECT_URI = os.getenv("MICROSOFT_REDIRECT_URI", "").strip()
 ALLOWED_OUTLOOK_EMAIL = os.getenv("ALLOWED_OUTLOOK_EMAIL", "").strip().lower()
 
 app = Flask(__name__)
@@ -41,7 +34,7 @@ database = Database(DATABASE_PATH)
 database.initialize()
 ollama_service = OllamaService(OLLAMA_BASE_URL, OLLAMA_MODEL)
 mail_agent = MailIntakeAgent(ollama_service, OLLAMA_MODEL)
-token_store = TokenStore(MICROSOFT_TOKEN_PATH)
+token_store = TokenStore("database/microsoft_token.json")
 graph_service = MicrosoftGraphService(
     MICROSOFT_TENANT_ID,
     MICROSOFT_CLIENT_ID,
@@ -55,6 +48,28 @@ OUTLOOK_SCOPES = ["User.Read", "Mail.Read", "offline_access"]
 
 Path("logs").mkdir(exist_ok=True)
 database.log("Applicatie", "INFO", "Applicatie gestart")
+
+
+def has_real_microsoft_secret() -> bool:
+    return bool(MICROSOFT_CLIENT_SECRET) and MICROSOFT_CLIENT_SECRET != "VUL_HIER_JE_NIEUWE_SECRET_IN"
+
+
+def startup_yes_no(value: bool) -> str:
+    return "ja" if value else "nee"
+
+
+database.log(
+    "Outlook",
+    "INFO",
+    "Outlook config loaded",
+    (
+        f"tenant={startup_yes_no(bool(MICROSOFT_TENANT_ID))} "
+        f"client_id={startup_yes_no(bool(MICROSOFT_CLIENT_ID))} "
+        f"secret={startup_yes_no(has_real_microsoft_secret())} "
+        f"redirect_uri={startup_yes_no(bool(MICROSOFT_REDIRECT_URI))} "
+        f"allowed_email={startup_yes_no(bool(ALLOWED_OUTLOOK_EMAIL))}"
+    ),
+)
 
 
 def future_agents() -> list[dict]:
@@ -197,10 +212,7 @@ def debug_outlook_config():
     config = {
         "tenant_id_present": yes_no(bool(MICROSOFT_TENANT_ID)),
         "client_id_present": yes_no(bool(MICROSOFT_CLIENT_ID)),
-        "client_secret_present": yes_no(
-            bool(MICROSOFT_CLIENT_SECRET)
-            and MICROSOFT_CLIENT_SECRET != "VUL_HIER_JE_NIEUWE_SECRET_IN"
-        ),
+        "client_secret_present": yes_no(has_real_microsoft_secret()),
         "redirect_uri": MICROSOFT_REDIRECT_URI,
         "allowed_outlook_email": ALLOWED_OUTLOOK_EMAIL,
         "outlook_connect_route": yes_no(route_exists("/outlook/connect")),
@@ -209,7 +221,6 @@ def debug_outlook_config():
     return render_template("debug_outlook_config.html", config=config)
 
 
-@app.route("/auth/microsoft/login")
 @app.route("/outlook/connect")
 def microsoft_login():
     if not graph_service.configured:
@@ -231,7 +242,6 @@ def microsoft_login():
     return redirect(authorization_url)
 
 
-@app.route("/auth/microsoft/callback")
 @app.route("/outlook/callback")
 def microsoft_callback():
     database.log("Outlook OAuth", "INFO", "Callback aangeroepen", "ja")

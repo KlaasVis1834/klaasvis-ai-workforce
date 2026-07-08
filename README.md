@@ -34,8 +34,7 @@ APP_SECRET_KEY=change-this-secret
 MICROSOFT_TENANT_ID=
 MICROSOFT_CLIENT_ID=
 MICROSOFT_CLIENT_SECRET=
-MICROSOFT_REDIRECT_URI=http://localhost:5000/auth/microsoft/callback
-MICROSOFT_TOKEN_PATH=database/microsoft_token.json
+MICROSOFT_REDIRECT_URI=http://localhost:5000/outlook/callback
 ALLOWED_OUTLOOK_EMAIL=<toegestaan-outlook-account>
 ```
 
@@ -74,7 +73,7 @@ Maak in Microsoft Entra ID een appregistratie voor deze lokale app.
 Gebruik deze redirect URI:
 
 ```text
-http://localhost:5000/auth/microsoft/callback
+http://localhost:5000/outlook/callback
 ```
 
 Gebruik alleen delegated permissions:
