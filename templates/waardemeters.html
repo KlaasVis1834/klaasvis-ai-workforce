@@ -51,8 +51,14 @@
             <p class="eyebrow">Werkvoorraad</p>
             <h2>Grijze werkvoorraad en historie</h2>
         </div>
-        <a class="text-link" href="{{ url_for('waardemeters_import') }}">Nieuwe import</a>
+        <div class="button-row">
+            <a class="button ghost" href="{{ url_for('waardemeters', status='openstaand') }}"><i class="ti ti-filter"></i>Openstaand</a>
+            <a class="button ghost" href="{{ url_for('waardemeters', status='behandeld') }}"><i class="ti ti-history"></i>Behandeld</a>
+            <a class="button ghost" href="{{ url_for('waardemeters', status='alles') }}"><i class="ti ti-list"></i>Alles</a>
+            <a class="text-link" href="{{ url_for('waardemeters_import') }}">Nieuwe import</a>
+        </div>
     </div>
+    <p class="empty">Filter: {{ status_filter|capitalize }}</p>
 
     {% if waardemeters %}
         <div class="table-wrap">
@@ -66,7 +72,9 @@
                         <th>Polisnummer</th>
                         <th>Branche</th>
                         <th>Soort meter</th>
-                        <th>Datum verzoek</th>
+                        <th>Verloop/verlengdatum</th>
+                        <th>Behandeld</th>
+                        <th>Portalstatus</th>
                         <th>Laatste fetch</th>
                         <th>AI Queue</th>
                         <th>Raw data</th>
@@ -83,7 +91,9 @@
                             <td>{{ item.policy_number or "-" }}</td>
                             <td>{{ item.branche or "-" }}</td>
                             <td><span class="pill amber">{{ item.meter_type or "onbekend" }}</span></td>
-                            <td class="mono">{{ item.request_date or "-" }}</td>
+                            <td class="mono">{{ item.expiry_date or item.request_date or "-" }}</td>
+                            <td class="mono">{{ item.handled_date or "-" }}</td>
+                            <td><span class="pill {{ 'green' if item.portal_status == 'behandeld' else 'cyan' }}">{{ item.portal_status or "onbekend" }}</span></td>
                             <td class="mono">{{ item.fetched_at or "-" }}</td>
                             <td>
                                 {% if item.task_type %}

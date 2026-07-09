@@ -29,6 +29,8 @@
             <div><dt>Soort meter</dt><dd>{{ item.meter_type or "-" }}</dd></div>
             <div><dt>Maatschappij</dt><dd>{{ item.insurer or "NH1816" }}</dd></div>
             <div><dt>Datum verzoek</dt><dd>{{ item.request_date or "-" }}</dd></div>
+            <div><dt>Verloop/verlengdatum</dt><dd>{{ item.expiry_date or "-" }}</dd></div>
+            <div><dt>Behandeld</dt><dd>{{ item.handled_date or "-" }}</dd></div>
             <div><dt>Status portaal</dt><dd>{{ item.portal_status or "-" }}</dd></div>
             <div><dt>Laatste fetch</dt><dd>{{ item.fetched_at or "-" }}</dd></div>
         </dl>

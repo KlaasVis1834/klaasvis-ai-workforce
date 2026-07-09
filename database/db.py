@@ -175,6 +175,8 @@ class Database:
                     branche TEXT,
                     meter_type TEXT,
                     request_date TEXT,
+                    expiry_date TEXT,
+                    handled_date TEXT,
                     status TEXT,
                     row_state TEXT,
                     raw_text TEXT,
@@ -287,6 +289,8 @@ class Database:
             "branche": "ALTER TABLE waardemeter_items ADD COLUMN branche TEXT",
             "meter_type": "ALTER TABLE waardemeter_items ADD COLUMN meter_type TEXT",
             "request_date": "ALTER TABLE waardemeter_items ADD COLUMN request_date TEXT",
+            "expiry_date": "ALTER TABLE waardemeter_items ADD COLUMN expiry_date TEXT",
+            "handled_date": "ALTER TABLE waardemeter_items ADD COLUMN handled_date TEXT",
             "status": "ALTER TABLE waardemeter_items ADD COLUMN status TEXT",
             "row_state": "ALTER TABLE waardemeter_items ADD COLUMN row_state TEXT",
             "raw_text": "ALTER TABLE waardemeter_items ADD COLUMN raw_text TEXT",
@@ -809,12 +813,13 @@ class Database:
                 """
                 INSERT OR IGNORE INTO waardemeter_items (
                     source, klantnaam, adres, email, polisnummer, branche, meter_type, request_date,
+                    expiry_date, handled_date,
                     status, row_state, raw_text, raw_json, fetched_at, processing_status,
                     proposed_action, concept_email_subject, concept_email_body,
                     anva_memo, agenda_task, agenda_due_date, source_hash,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.get("source", "Import"),
@@ -825,6 +830,8 @@ class Database:
                     item.get("branche"),
                     item.get("meter_type"),
                     item.get("request_date"),
+                    item.get("expiry_date"),
+                    item.get("handled_date"),
                     item.get("portal_status") or item.get("status"),
                     item.get("row_state"),
                     item.get("raw_text"),
@@ -902,10 +909,19 @@ class Database:
             )
             return int(cursor.lastrowid)
 
-    def waardemeters(self, limit: int = 200) -> list[dict[str, Any]]:
+    def waardemeters(self, limit: int = 200, status_filter: str = "openstaand") -> list[dict[str, Any]]:
+        filter_sql = ""
+        params: list[Any] = []
+        if status_filter == "openstaand":
+            filter_sql = "WHERE w.status = ?"
+            params.append("openstaand")
+        elif status_filter == "behandeld":
+            filter_sql = "WHERE w.status = ?"
+            params.append("behandeld")
+        params.append(limit)
         with self.connect() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT w.id, w.source,
                        klantnaam AS customer_name,
                        adres AS address,
@@ -915,6 +931,8 @@ class Database:
                        meter_type,
                        'NH1816' AS insurer,
                        request_date,
+                       expiry_date,
+                       handled_date,
                        w.status AS portal_status,
                        row_state,
                        processing_status AS status,
@@ -936,10 +954,11 @@ class Database:
                        t.target_agent
                 FROM waardemeter_items w
                 LEFT JOIN ai_tasks t ON t.id = w.task_id
+                {filter_sql}
                 ORDER BY w.id DESC
                 LIMIT ?
                 """,
-                (limit,),
+                tuple(params),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -956,6 +975,8 @@ class Database:
                        meter_type,
                        'NH1816' AS insurer,
                        request_date,
+                       expiry_date,
+                       handled_date,
                        w.status AS portal_status,
                        row_state,
                        processing_status AS status,

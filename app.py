@@ -369,10 +369,12 @@ WAARDEMETER_HEADER_ALIASES = {
     "customer_name": {"klant", "klantnaam", "relatie", "relatienaam", "naam", "verzekeringnemer"},
     "address": {"adres", "straat", "woonadres", "risicoadres"},
     "email": {"email", "e-mail", "emailadres", "mail"},
-    "policy_number": {"polis", "polisnummer", "polnr", "policynumber", "policy_number"},
+    "policy_number": {"polis", "polisnummer", "polisnr", "polnr", "policynumber", "policy_number"},
     "branche": {"branche", "branch", "verzekering", "product"},
     "meter_type": {"soort", "type", "soortwaardemeter", "soort_waardemeter", "waardemeter", "meter"},
     "request_date": {"datum", "datumverzoek", "datum_verzoek", "verzoekdatum", "aanvraagdatum"},
+    "expiry_date": {"verloopdatuminboedel", "verlengdatumopstal", "verloopdatum", "verlengdatum", "einddatum"},
+    "handled_date": {"behandeld", "behandelddatum", "datumbehandeld"},
     "portal_status": {"status", "nh1816status", "portalstatus", "portal_status"},
 }
 
@@ -530,6 +532,8 @@ def import_nh1816_fetch_items(items: list[dict[str, Any]], fetched_at: str) -> d
                 "polisnummer": item.get("polisnummer") or item.get("policy_number") or "",
                 "branche": item.get("branche") or "",
                 "soort": item.get("meter_type") or item.get("branche") or "",
+                "verloopdatum": item.get("expiry_date") or "",
+                "behandeld": item.get("handled_date") or "",
                 "datum verzoek": item.get("request_date") or "",
                 "status": item.get("status") or item.get("portal_status") or "",
             },
@@ -593,11 +597,13 @@ def documents():
 
 @app.route("/waardemeters")
 def waardemeters():
+    status_filter = request.args.get("status", "openstaand")
     return render_template(
         "waardemeters.html",
-        waardemeters=database.waardemeters(200),
+        waardemeters=database.waardemeters(200, status_filter=status_filter),
         stats=database.waardemeter_stats(),
         nh1816_config=nh1816_config_status(),
+        status_filter=status_filter,
     )
 
 

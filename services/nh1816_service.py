@@ -59,21 +59,27 @@ class NH1816PortalService:
                 page.goto(self.value_meters_url, wait_until="domcontentloaded", timeout=60000)
                 self._try_login(page, PlaywrightTimeoutError)
                 page.goto(self.value_meters_url, wait_until="networkidle", timeout=60000)
+                self._wait_for_value_meter_rows(page, PlaywrightTimeoutError)
                 html = page.content()
                 html_snapshot_path = self.debug_dir / "nh1816_value_meters.html"
                 html_snapshot_path.write_text(html, encoding="utf-8")
+                screenshot_path = self.debug_dir / "nh1816_value_meters.png"
+                page.screenshot(path=str(screenshot_path), full_page=True)
+                items, columns = self._extract_visible_table_rows(page)
                 soup = BeautifulSoup(html, "html.parser")
-                items, columns = self._extract_items(soup)
+                if not items:
+                    items, columns = self._extract_items(soup)
                 if not items:
                     items = self._extract_raw_rows(soup)
                 return NH1816FetchResult(
                     items=items,
                     columns=columns,
                     fetched_at=fetched_at,
+                    screenshot_path=str(screenshot_path),
                     html_snapshot_path=str(html_snapshot_path),
                 )
             except Exception as exc:
-                screenshot_path = self.debug_dir / "nh1816_login_failed.png"
+                screenshot_path = self.debug_dir / "nh1816_value_meters.png"
                 html_snapshot_path = self.debug_dir / "nh1816_value_meters.html"
                 try:
                     page.screenshot(path=str(screenshot_path), full_page=True)
@@ -150,6 +156,92 @@ class NH1816PortalService:
                 continue
         return None
 
+    def _wait_for_value_meter_rows(self, page: Any, timeout_error: type[Exception]) -> None:
+        try:
+            page.wait_for_selector("table tr, [role='row']", timeout=30000)
+        except timeout_error:
+            page.wait_for_load_state("domcontentloaded", timeout=10000)
+
+    def _extract_visible_table_rows(self, page: Any) -> tuple[list[dict[str, Any]], list[str]]:
+        table_payload = page.evaluate(
+            """
+            () => {
+                const visible = (el) => {
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+                };
+                const rowMeta = (row) => {
+                    const style = window.getComputedStyle(row);
+                    return {
+                        className: typeof row.className === 'string' ? row.className : '',
+                        style: row.getAttribute('style') || '',
+                        dataStatus: row.getAttribute('data-status') || '',
+                        backgroundColor: style.backgroundColor || '',
+                        color: style.color || ''
+                    };
+                };
+                const tables = Array.from(document.querySelectorAll('table')).filter(visible);
+                for (const table of tables) {
+                    const headerCells = Array.from(table.querySelectorAll('thead th')).filter(visible);
+                    let headers = headerCells.map((cell) => cell.innerText.trim());
+                    if (!headers.length) {
+                        const first = Array.from(table.querySelectorAll('tr')).find((row) => visible(row));
+                        if (first) {
+                            headers = Array.from(first.querySelectorAll('th')).filter(visible).map((cell) => cell.innerText.trim());
+                        }
+                    }
+                    const rows = [];
+                    for (const row of Array.from(table.querySelectorAll('tbody tr, tr')).filter(visible)) {
+                        const cells = Array.from(row.querySelectorAll('td')).filter(visible);
+                        if (!cells.length) continue;
+                        const values = cells.map((cell) => cell.innerText.trim());
+                        if (!values.some(Boolean)) continue;
+                        rows.push({ values, rawText: values.filter(Boolean).join(' | '), meta: rowMeta(row) });
+                    }
+                    if (rows.length) return { headers, rows };
+                }
+                const roleRows = Array.from(document.querySelectorAll('[role="row"]')).filter(visible);
+                const rows = [];
+                for (const row of roleRows) {
+                    const cells = Array.from(row.querySelectorAll('[role="cell"], [role="gridcell"], [role="columnheader"]')).filter(visible);
+                    const values = cells.length ? cells.map((cell) => cell.innerText.trim()) : [row.innerText.trim()];
+                    if (!values.some(Boolean)) continue;
+                    rows.push({ values, rawText: values.filter(Boolean).join(' | '), meta: rowMeta(row) });
+                }
+                return { headers: [], rows };
+            }
+            """
+        )
+        headers = [str(value or "").strip() for value in table_payload.get("headers", [])]
+        items = []
+        for row in table_payload.get("rows", []):
+            values = [str(value or "").strip() for value in row.get("values", [])]
+            raw_text = str(row.get("rawText") or " | ".join(value for value in values if value))
+            meta = row.get("meta") or {}
+            mapped = self._map_row(headers, values, raw_text)
+            row_state = self._row_state_from_marker(
+                " ".join(
+                    [
+                        str(meta.get("className") or ""),
+                        str(meta.get("style") or ""),
+                        str(meta.get("dataStatus") or ""),
+                        str(meta.get("backgroundColor") or ""),
+                        raw_text,
+                    ]
+                )
+            )
+            if row_state == "unknown":
+                row_state = self._status_state(mapped.get("status", ""))
+            mapped["row_state"] = row_state
+            mapped["status"] = self._portal_status(row_state)
+            mapped["row_class"] = meta.get("className")
+            mapped["row_background_color"] = meta.get("backgroundColor")
+            mapped["raw_json"] = {**(mapped.get("raw_json") or {}), "_row_meta": meta}
+            mapped["action_button_present"] = False
+            items.append(mapped)
+        return items, headers
+
     def _extract_items(self, soup: Any) -> tuple[list[dict[str, Any]], list[str]]:
         table = soup.find("table")
         if not table:
@@ -169,6 +261,7 @@ class NH1816PortalService:
             mapped["action_button_present"] = bool(row.find(["button", "a", "input"]))
             row_state = self._row_state(row)
             mapped["row_state"] = self._status_state(mapped.get("status", "")) if row_state == "unknown" else row_state
+            mapped["status"] = self._portal_status(mapped["row_state"])
             rows.append(mapped)
         return rows, headers
 
@@ -195,17 +288,32 @@ class NH1816PortalService:
         return []
 
     def _map_row(self, headers: list[str], values: list[str], raw_text: str) -> dict[str, Any]:
+        if not headers:
+            headers = [
+                "Relatie",
+                "Adres",
+                "Emailadres",
+                "Branche",
+                "Polisnr.",
+                "Verloopdatum Inboedel / Verlengdatum Opstal",
+                "Behandeld",
+            ]
         row = {headers[index] if index < len(headers) else f"kolom_{index + 1}": value for index, value in enumerate(values)}
         normalized = {self._normalize_header(key): value for key, value in row.items()}
         return {
             "klantnaam": self._first_value(normalized, ["klantnaam", "klant", "relatie", "verzekeringnemer", "naam"]),
             "adres": self._first_value(normalized, ["adres", "straat", "woonadres", "risicoadres"]),
             "email": self._first_value(normalized, ["email", "emailadres", "e-mail", "mail"]),
-            "polisnummer": self._first_value(normalized, ["polisnummer", "polis", "polnr", "policynumber"]),
+            "polisnummer": self._first_value(normalized, ["polisnummer", "polisnr", "polis", "polnr", "policynumber"]),
             "branche": self._first_value(normalized, ["branche", "branch", "verzekering", "product"]),
             "meter_type": self._first_value(normalized, ["soort", "type", "waardemeter", "meter", "soortwaardemeter", "branche"]),
+            "expiry_date": self._first_value(
+                normalized,
+                ["verloopdatuminboedel", "verlengdatumopstal", "verloopdatum", "verlengdatum", "einddatum"],
+            ),
+            "handled_date": self._first_value(normalized, ["behandeld", "behandelddatum", "datumbehandeld"]),
             "request_date": self._first_value(normalized, ["datumverzoek", "verzoekdatum", "datum", "aanvraagdatum"]),
-            "status": self._first_value(normalized, ["status", "portalstatus", "nh1816status"]) or "openstaand",
+            "status": self._first_value(normalized, ["status", "portalstatus", "nh1816status"]) or "",
             "raw_text": raw_text,
             "raw_json": row,
         }
@@ -232,16 +340,27 @@ class NH1816PortalService:
                 element.get_text(" ", strip=True) if hasattr(element, "get_text") else "",
             ]
         ).lower()
-        if "groen" in marker or "green" in marker or "success" in marker or "verwerkt" in marker:
+        return self._row_state_from_marker(marker)
+
+    def _row_state_from_marker(self, marker: str) -> str:
+        marker = (marker or "").lower()
+        if "groen" in marker or "green" in marker or "success" in marker or "verwerkt" in marker or "behandeld" in marker:
             return "processed"
         if "grijs" in marker or "grey" in marker or "gray" in marker or "nieuw" in marker or "openstaand" in marker:
             return "open"
-        style_color = re.search(r"background(?:-color)?\s*:\s*([^;]+)", marker)
-        if style_color:
-            color = style_color.group(1)
-            if "green" in color or "#0" in color or "rgb(0" in color:
+        color_match = re.search(r"(?:background(?:-color)?\s*:\s*)?(rgba?\([^)]+\)|#[0-9a-f]{3,8}|green|grey|gray)", marker)
+        if color_match:
+            color = color_match.group(1)
+            rgb = self._parse_rgb(color)
+            if rgb:
+                red, green, blue = rgb
+                if green > red + 25 and green > blue + 25:
+                    return "processed"
+                if abs(red - green) <= 18 and abs(green - blue) <= 18 and 90 <= red <= 235:
+                    return "open"
+            if color == "green":
                 return "processed"
-            if "gray" in color or "grey" in color or "rgb(128" in color or "#ccc" in color or "#ddd" in color:
+            if color in {"gray", "grey"} or color.startswith("#ccc") or color.startswith("#ddd") or color.startswith("#eee"):
                 return "open"
         return "unknown"
 
@@ -252,3 +371,16 @@ class NH1816PortalService:
         if "open" in lowered or "nieuw" in lowered or "grijs" in lowered:
             return "open"
         return "unknown"
+
+    def _portal_status(self, row_state: str) -> str:
+        if row_state == "open":
+            return "openstaand"
+        if row_state == "processed":
+            return "behandeld"
+        return "onbekend"
+
+    def _parse_rgb(self, value: str) -> tuple[int, int, int] | None:
+        match = re.search(r"rgba?\((\d+),\s*(\d+),\s*(\d+)", value or "")
+        if not match:
+            return None
+        return int(match.group(1)), int(match.group(2)), int(match.group(3))

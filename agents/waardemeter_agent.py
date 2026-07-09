@@ -74,6 +74,19 @@ class WaardemeterAgent(BaseAgent):
                 or input_data.get("datum")
                 or ""
             ),
+            "expiry_date": self.clean_text(
+                input_data.get("expiry_date")
+                or input_data.get("verloopdatum")
+                or input_data.get("verlengdatum")
+                or input_data.get("verloopdatum/verlengdatum")
+                or ""
+            ),
+            "handled_date": self.clean_text(
+                input_data.get("handled_date")
+                or input_data.get("behandeld")
+                or input_data.get("behandeld datum")
+                or ""
+            ),
             "portal_status": self.clean_text(
                 input_data.get("portal_status")
                 or input_data.get("status")
@@ -112,7 +125,7 @@ class WaardemeterAgent(BaseAgent):
         return lowered
 
     def processing_status(self, item: dict[str, Any]) -> str:
-        if item.get("row_state") == "processed":
+        if item.get("row_state") == "processed" or item.get("portal_status") == "behandeld":
             return "verwerkt_in_nh1816"
         return "nieuw_verzoek"
 
