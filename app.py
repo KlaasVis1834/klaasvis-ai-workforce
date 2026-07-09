@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 from agents import MailIntakeAgent
 from database import Database
-from services import MailboxMonitor, MicrosoftGraphService, OllamaService, TokenStore
+from services import AIAnalysisWorker, MailboxMonitor, MicrosoftGraphService, OllamaService, TokenStore
 from services.microsoft_graph_service import create_pkce_pair
 
 
@@ -24,6 +24,9 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b").strip()
 DATABASE_PATH = os.getenv("DATABASE_PATH", "database/klaasvis_ai.db").strip()
 APP_SECRET_KEY = os.getenv("APP_SECRET_KEY", "change-this-secret").strip()
 ENABLE_SENT_LEARNING = os.getenv("ENABLE_SENT_LEARNING", "false").strip().lower() == "true"
+OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
+OLLAMA_BODY_CHAR_LIMIT = int(os.getenv("OLLAMA_BODY_CHAR_LIMIT", "1500"))
+OLLAMA_ANALYSIS_INTERVAL_SECONDS = int(os.getenv("OLLAMA_ANALYSIS_INTERVAL_SECONDS", "10"))
 MICROSOFT_TENANT_ID = os.getenv("MICROSOFT_TENANT_ID", "").strip()
 MICROSOFT_CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID", "").strip()
 MICROSOFT_CLIENT_SECRET = os.getenv("MICROSOFT_CLIENT_SECRET", "").strip()
@@ -42,7 +45,12 @@ app.config.update(
 
 database = Database(DATABASE_PATH)
 database.initialize()
-ollama_service = OllamaService(OLLAMA_BASE_URL, OLLAMA_MODEL)
+ollama_service = OllamaService(
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL,
+    timeout=OLLAMA_TIMEOUT_SECONDS,
+    body_char_limit=OLLAMA_BODY_CHAR_LIMIT,
+)
 mail_agent = MailIntakeAgent(ollama_service, OLLAMA_MODEL)
 token_store = TokenStore("database/microsoft_token.json")
 graph_service = MicrosoftGraphService(
@@ -119,6 +127,8 @@ def inject_settings() -> dict:
         "active_model": OLLAMA_MODEL,
         "allowed_outlook_email": ALLOWED_OUTLOOK_EMAIL,
         "sent_learning_enabled": ENABLE_SENT_LEARNING,
+        "ollama_timeout_seconds": OLLAMA_TIMEOUT_SECONDS,
+        "ollama_body_char_limit": OLLAMA_BODY_CHAR_LIMIT,
     }
 
 
@@ -163,11 +173,11 @@ def route_mail_analysis(mail_data: dict, analysis: dict) -> dict:
         routed["reden_menselijke_controle"] = ""
         return routed
 
-    if routed.get("processing_status") == "ai_unavailable":
+    if routed.get("processing_status") in {"ai_unavailable", "ai_timeout"}:
         routed["volgende_agent"] = "Human Review"
         routed["requires_human_review"] = True
         routed["menselijke_controle_nodig"] = True
-        routed["reason_for_human_review"] = routed.get("reason_for_human_review") or "Ollama is niet beschikbaar."
+        routed["reason_for_human_review"] = routed.get("reason_for_human_review") or "Ollama is niet beschikbaar of te traag."
         routed["reden_menselijke_controle"] = routed["reason_for_human_review"]
         routed["routed_at"] = datetime.now().isoformat(timespec="seconds")
         return routed
@@ -271,15 +281,18 @@ def dashboard():
         "Status Ollama gecontroleerd",
         "online" if ollama_online else "offline",
     )
-    stats = database.dashboard_stats()
+    show_hidden = request.args.get("show_hidden") == "1"
+    stats = database.dashboard_stats(include_hidden=show_hidden)
     return render_template(
         "dashboard.html",
         ollama_status="online" if ollama_online else "offline",
         database_status=database.status(),
         outlook_status=graph_service.connection_status(),
         monitor_status=mailbox_monitor.snapshot(),
+        ai_worker_status=ai_analysis_worker.snapshot(),
         stats=stats,
         logs=database.latest_logs(10),
+        show_hidden=show_hidden,
     )
 
 
@@ -294,11 +307,21 @@ def agents():
 
 @app.route("/mail-analyses")
 def mail_analyses():
+    show_hidden = request.args.get("show_hidden") == "1"
     return render_template(
         "mail_analyses.html",
-        analyses=database.mail_analyses(100),
-        stats=database.dashboard_stats(),
+        analyses=database.mail_analyses(100, include_hidden=show_hidden),
+        stats=database.dashboard_stats(include_hidden=show_hidden),
+        show_hidden=show_hidden,
     )
+
+
+@app.route("/mail-analyses/retry/<int:analysis_id>", methods=["POST"])
+def retry_mail_analysis(analysis_id: int):
+    database.retry_analysis(analysis_id)
+    database.log("Mail Intake Agent", "INFO", "Mail opnieuw in AI queue gezet", f"id={analysis_id}")
+    flash("Mail is opnieuw in de AI analysequeue gezet.", "success")
+    return redirect(url_for("mail_analyses"))
 
 
 @app.route("/mail-test", methods=["GET", "POST"])
@@ -611,9 +634,94 @@ def outlook_disconnect_account(account_id: str):
     return redirect(url_for("outlook_accounts"))
 
 
+def queued_analysis() -> dict:
+    return {
+        "categorie": "ONBEKEND",
+        "vertrouwen": 0.0,
+        "vertrouwen_score": 0.0,
+        "prioriteit": "normaal",
+        "samenvatting": "",
+        "korte_samenvatting": "",
+        "voorgestelde_actie": "",
+        "voorgestelde_vervolgstap": "",
+        "volgende_agent": "",
+        "menselijke_controle_nodig": False,
+        "requires_human_review": False,
+        "reason_for_human_review": "",
+        "processing_status": "queued",
+        "ai_model": OLLAMA_MODEL,
+        "ai_parse_status": "queued",
+    }
+
+
+def cleanup_active_outlook_messages() -> dict[str, int]:
+    moved = 0
+    deleted = 0
+    checked = 0
+    for item in database.active_outlook_messages(100):
+        message_id = item.get("outlook_message_id") or item.get("message_id")
+        if not message_id:
+            continue
+        checked += 1
+        state = graph_service.inbox_message_state(message_id)
+        if state == "inbox":
+            continue
+        if state == "deleted_or_not_found":
+            deleted += 1
+            database.update_processing_status(item["id"], "deleted_or_not_found", item.get("subject"))
+            database.log("Outlook", "INFO", "Mail verwijderd of niet gevonden", f"{message_id} | {item.get('subject')}")
+        else:
+            moved += 1
+            database.update_processing_status(item["id"], "moved_or_archived", item.get("subject"))
+            database.log("Outlook", "INFO", "Mail verplaatst of gearchiveerd", f"{message_id} | {item.get('subject')}")
+    return {"checked": checked, "moved": moved, "deleted": deleted}
+
+
+def process_one_queued_mail() -> dict[str, int]:
+    mail_row = database.get_next_queued_mail()
+    if not mail_row:
+        return {"processed": 0, "timeouts": 0, "hidden": 0}
+
+    message_id = mail_row.get("outlook_message_id") or mail_row.get("message_id")
+    if mail_row.get("source") == "Outlook" and message_id:
+        state = graph_service.inbox_message_state(message_id)
+        if state != "inbox":
+            status = "deleted_or_not_found" if state == "deleted_or_not_found" else "moved_or_archived"
+            database.update_processing_status(mail_row["id"], status, mail_row.get("subject"))
+            return {"processed": 0, "timeouts": 0, "hidden": 1}
+
+    database.update_processing_status(mail_row["id"], "analyzing", mail_row.get("subject"))
+    database.log("Mail Intake Agent", "INFO", "AI gestart", f"id={mail_row['id']}; subject={mail_row.get('subject')}")
+
+    analysis = route_mail_analysis(mail_row, mail_agent.run(mail_row))
+    if analysis.get("processing_status") == "ai_timeout":
+        retry_data = dict(mail_row)
+        retry_data["retry_minimal"] = True
+        database.log("Mail Intake Agent", "WARNING", "Ollama timeout; retry met minimale input", mail_row.get("subject"))
+        analysis = route_mail_analysis(retry_data, mail_agent.run(retry_data))
+        if analysis.get("processing_status") == "ai_timeout":
+            database.update_mail_analysis_result(mail_row["id"], analysis)
+            database.log("Mail Intake Agent", "ERROR", "AI timeout na retry", mail_row.get("subject"))
+            return {"processed": 1, "timeouts": 1, "hidden": 0}
+
+    database.update_mail_analysis_result(mail_row["id"], analysis)
+    database.log(
+        "Mail Intake Agent",
+        "INFO",
+        "AI analyse opgeslagen",
+        (
+            f"id={mail_row['id']}; categorie={analysis.get('categorie')}; "
+            f"vertrouwen={analysis.get('vertrouwen_score', analysis.get('vertrouwen'))}; "
+            f"volgende_agent={analysis.get('volgende_agent')}; status={analysis.get('processing_status')}"
+        ),
+    )
+    return {"processed": 1, "timeouts": 0, "hidden": 0}
+
+
 def import_outlook_messages(mode: str = "poll") -> dict[str, int]:
     import_batch_id = uuid.uuid4().hex
     database.log("Outlook", "INFO", "Mailbox scan gestart", f"modus={mode}; batch={import_batch_id}")
+    cleanup_result = {"checked": 0, "moved": 0, "deleted": 0}
     if mode == "learning":
         if not ENABLE_SENT_LEARNING:
             database.log("Outlook", "INFO", "Sentitems overgeslagen", "ENABLE_SENT_LEARNING=false")
@@ -622,6 +730,13 @@ def import_outlook_messages(mode: str = "poll") -> dict[str, int]:
         database.log("Outlook", "INFO", "Graph OK", f"{len(messages)} sentitems opgehaald voor leermodus")
     else:
         database.log("Outlook", "INFO", "Inbox sync gestart")
+        cleanup_result = cleanup_active_outlook_messages()
+        database.log(
+            "Outlook",
+            "INFO",
+            "Actieve Inbox-mails gecontroleerd",
+            f"checked={cleanup_result['checked']}; moved={cleanup_result['moved']}; deleted={cleanup_result['deleted']}",
+        )
         sync_anchor = graph_service.inbox_sync_anchor()
         database.log("Outlook", "INFO", "Inbox sync anchor", sync_anchor)
         messages = graph_service.fetch_inbox_messages(mode, since=sync_anchor)
@@ -633,8 +748,6 @@ def import_outlook_messages(mode: str = "poll") -> dict[str, int]:
     imported = 0
     duplicates = 0
     failed = 0
-    routed_count = 0
-    human_review_count = 0
     latest_received_at = None
 
     for mail_data in messages:
@@ -647,52 +760,16 @@ def import_outlook_messages(mode: str = "poll") -> dict[str, int]:
             database.log("Outlook", "INFO", "Duplicaat overgeslagen", mail_data.get("subject"))
             continue
 
-        database.log("Mail Intake Agent", "INFO", "Mail ontvangen", mail_data.get("subject"))
-        database.log(
-            "Outlook",
-            "INFO",
-            "Nieuwe inboxmail gevonden",
-            f"outlook_message_id={mail_data.get('message_id')}; received_at={mail_data.get('received_at')}; source_folder={mail_data.get('source_folder')}",
-        )
-        database.log("Mail Intake Agent", "INFO", "Ollama gestart", mail_data.get("internet_message_id"))
-        analysis = route_mail_analysis(mail_data, mail_agent.run(mail_data))
-        database.log(
-            "Mail Intake Agent",
-            "INFO",
-            "AI analyse ontvangen",
-            (
-                f"model={analysis.get('ai_model')}; latency_ms={analysis.get('ai_latency_ms')}; "
-                f"parse={analysis.get('ai_parse_status')}; categorie={analysis.get('categorie')}; "
-                f"vertrouwen={analysis.get('vertrouwen_score', analysis.get('vertrouwen'))}; "
-                f"volgende_agent={analysis.get('volgende_agent')}; "
-                f"menselijke_controle={analysis.get('requires_human_review')}; "
-                f"processing_status={analysis.get('processing_status')}"
-            ),
-        )
-        database.log("Router", "INFO", "Routing bepaald", f"{analysis.get('processing_status')} -> {analysis.get('volgende_agent')}")
-        if analysis.get("processing_status") == "routed":
-            routed_count += 1
-        if analysis.get("requires_human_review"):
-            human_review_count += 1
+        if mode == "learning":
+            database.log("Outlook", "INFO", "Verzonden bericht opgeslagen als leermodus", mail_data.get("subject"))
+            analysis = route_mail_analysis(mail_data, queued_analysis())
+        else:
+            database.log("Mail Intake Agent", "INFO", "Nieuwe inboxmail in AI queue gezet", mail_data.get("subject"))
+            analysis = queued_analysis()
         try:
             analysis_id = database.save_mail_analysis(mail_data, analysis)
             imported += 1
-            if mail_agent.last_error:
-                database.log("Mail Intake Agent", "ERROR", "Analyse mislukt", mail_agent.last_error)
-                if "json" in mail_agent.last_error.lower():
-                    database.log("Mail Intake Agent", "ERROR", "JSON parse fout", mail_agent.last_error)
-            else:
-                database.log("Mail Intake Agent", "INFO", "Analyse voltooid", f"Analyse ID {analysis_id}")
-                database.log("Database", "INFO", "Database opgeslagen", f"Analyse ID {analysis_id}")
-                if analysis.get("processing_status") == "learning_only":
-                    database.log("Outlook", "INFO", "Verzonden bericht opgeslagen als leermodus", mail_data.get("subject"))
-                elif analysis.get("volgende_agent"):
-                    database.log(
-                        "Router",
-                        "INFO",
-                        "Mail gerouteerd naar volgende agent",
-                        f"{analysis.get('volgende_agent')} | {mail_data.get('subject')}",
-                    )
+            database.log("Database", "INFO", "Queued mail opgeslagen", f"Analyse ID {analysis_id}")
         except Exception as exc:
             failed += 1
             database.log("Database", "ERROR", "Database fout", str(exc))
@@ -701,10 +778,8 @@ def import_outlook_messages(mode: str = "poll") -> dict[str, int]:
         "Outlook",
         "INFO",
         "Mailbox scan afgerond",
-        f"batch={import_batch_id}; geimporteerd={imported}; duplicaten={duplicates}; fouten={failed}; gerouteerd={routed_count}; menselijke_controle={human_review_count}",
+        f"batch={import_batch_id}; queued={imported}; duplicaten={duplicates}; fouten={failed}; hidden={cleanup_result['moved'] + cleanup_result['deleted']}",
     )
-    database.log("Router", "INFO", "Aantal mails gerouteerd naar volgende agent", str(routed_count))
-    database.log("Router", "INFO", "Aantal mails met menselijke controle", str(human_review_count))
     if mode != "learning":
         graph_service.update_last_sync_at(latest_received_at)
         database.log("Outlook", "INFO", "Last sync bijgewerkt", latest_received_at or "nu")
@@ -725,6 +800,13 @@ mailbox_monitor = MailboxMonitor(
 )
 mailbox_monitor.start()
 
+ai_analysis_worker = AIAnalysisWorker(
+    process_callback=process_one_queued_mail,
+    log_callback=database.log,
+    interval_seconds=OLLAMA_ANALYSIS_INTERVAL_SECONDS,
+)
+ai_analysis_worker.start()
+
 
 @app.route("/api/status")
 def api_status():
@@ -739,6 +821,7 @@ def api_status():
                 "allowed_email": outlook_status.get("allowed_email"),
             },
             "monitor": mailbox_monitor.snapshot(),
+            "ai_worker": ai_analysis_worker.snapshot(),
             "stats": database.dashboard_stats(),
         }
     )

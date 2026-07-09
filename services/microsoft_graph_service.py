@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 import requests
+from requests import HTTPError
 
 from services.token_store import TokenStore
 
@@ -207,6 +208,7 @@ class MicrosoftGraphService:
                     "sender",
                     "toRecipients",
                     "body",
+                    "bodyPreview",
                     "receivedDateTime",
                     "hasAttachments",
                     "isRead",
@@ -247,6 +249,7 @@ class MicrosoftGraphService:
             "sender": sender.get("address") or sender.get("name") or "",
             "recipient": ", ".join(recipients),
             "subject": message.get("subject") or "",
+            "body_preview": unescape(message.get("bodyPreview") or ""),
             "body": unescape(body),
             "received_at": message.get("receivedDateTime"),
             "has_attachments": bool(message.get("hasAttachments")),
@@ -266,6 +269,23 @@ class MicrosoftGraphService:
             }
             for item in response.get("value", [])
         ]
+
+    def inbox_message_state(self, message_id: str) -> str:
+        try:
+            self._graph_get(f"/me/mailFolders/inbox/messages/{message_id}")
+            return "inbox"
+        except HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            if status_code != 404:
+                raise
+        try:
+            self._graph_get(f"/me/messages/{message_id}")
+            return "moved_or_archived"
+        except HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            if status_code == 404:
+                return "deleted_or_not_found"
+            raise
 
     def _graph_get(self, path: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
         access_token = self.get_access_token()

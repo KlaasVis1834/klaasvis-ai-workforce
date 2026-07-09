@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import re
 import time
@@ -71,10 +72,11 @@ DEFAULT_ANALYSIS = {
 
 
 class OllamaService:
-    def __init__(self, base_url: str, model: str, timeout: int = 90) -> None:
+    def __init__(self, base_url: str, model: str, timeout: int = 180, body_char_limit: int = 1500) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
+        self.body_char_limit = body_char_limit
         self.last_error: str | None = None
 
     def is_online(self) -> bool:
@@ -99,6 +101,19 @@ class OllamaService:
                 "latency_ms": latency_ms,
                 "last_error": None,
             }
+        except requests.Timeout as exc:
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            self.last_error = str(exc)
+            fallback = self.fallback_analysis(
+                f"Ollama timeout: {exc}",
+                has_attachments=bool(mail_data.get("has_attachments")),
+                parse_status="timeout",
+                processing_status="ai_timeout",
+            )
+            fallback["ai_model"] = self.model
+            fallback["ai_raw_response"] = raw_response[:4000]
+            fallback["ai_latency_ms"] = latency_ms
+            return fallback
         except Exception as exc:
             latency_ms = int((time.perf_counter() - started) * 1000)
             self.last_error = str(exc)
@@ -210,6 +225,7 @@ class OllamaService:
         reason: str,
         has_attachments: bool = False,
         parse_status: str = "fallback",
+        processing_status: str | None = None,
     ) -> dict[str, Any]:
         analysis = DEFAULT_ANALYSIS.copy()
         analysis["bijlagen"] = bool(has_attachments)
@@ -223,7 +239,9 @@ class OllamaService:
         analysis["requires_human_review"] = True
         analysis["reason_for_human_review"] = reason
         analysis["reden_menselijke_controle"] = reason
-        analysis["processing_status"] = "ai_unavailable" if "offline" in reason.lower() else "needs_human"
+        analysis["processing_status"] = processing_status or (
+            "ai_timeout" if "offline" in reason.lower() or "timeout" in reason.lower() else "needs_human"
+        )
         analysis["redenen_voor_classificatie"] = [reason]
         analysis["ai_model"] = self.model
         analysis["ai_parse_status"] = parse_status
@@ -361,6 +379,13 @@ Geef uitsluitend geldige JSON terug. Geen markdown, geen toelichting.
 
     def _build_user_prompt(self, mail_data: dict[str, Any]) -> str:
         schema = json.dumps(DEFAULT_ANALYSIS, ensure_ascii=False, indent=2)
+        body_preview = self._clean_text(mail_data.get("body_preview") or "")
+        body = self._clean_text(mail_data.get("body") or "")
+        if mail_data.get("retry_minimal"):
+            body = body_preview or body[:500]
+        else:
+            body = self._trim_thread(body, self.body_char_limit)
+        attachment_metadata = mail_data.get("attachment_metadata") or []
         return f"""
 Gebruik exact deze JSON-structuur:
 {schema}
@@ -377,7 +402,26 @@ Ontvanger: {mail_data.get("recipient", "")}
 Onderwerp: {mail_data.get("subject", "")}
 Bijlagen aanwezig: {mail_data.get("has_attachments", False)}
 Bijlagennamen: {mail_data.get("attachment_names", "")}
+Bijlagenmetadata: {json.dumps(attachment_metadata, ensure_ascii=False)[:800]}
+BodyPreview: {body_preview[:500]}
 
 Tekst:
-{mail_data.get("body", "")}
+{body}
 """.strip()
+
+    def _clean_text(self, value: str) -> str:
+        text = html.unescape(str(value or ""))
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = text.replace("\r", "\n")
+        text = re.sub(r"\n\s*>.*", "\n", text)
+        text = re.split(
+            r"(?im)^(-{2,}\s*Oorspronkelijk bericht\s*-{2,}|From:|Van:|Sent:|Verzonden:|Onderwerp:)",
+            text,
+            maxsplit=1,
+        )[0]
+        text = re.sub(r"(?is)(disclaimer|vertrouwelijk|confidential).{0,1200}$", "", text)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
+
+    def _trim_thread(self, value: str, limit: int) -> str:
+        return value[: max(200, limit)]

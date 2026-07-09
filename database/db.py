@@ -39,6 +39,7 @@ class Database:
                     sender TEXT,
                     recipient TEXT,
                     subject TEXT,
+                    body_preview TEXT,
                     body TEXT,
                     has_attachments INTEGER,
                     attachment_names TEXT,
@@ -64,6 +65,7 @@ class Database:
                     ai_raw_response TEXT,
                     ai_parse_status TEXT,
                     ai_latency_ms INTEGER,
+                    analysis_attempts INTEGER DEFAULT 0,
                     routed_at TEXT,
                     raw_json TEXT
                 )
@@ -101,6 +103,7 @@ class Database:
             "source_hash": "ALTER TABLE mail_analyses ADD COLUMN source_hash TEXT",
             "import_batch_id": "ALTER TABLE mail_analyses ADD COLUMN import_batch_id TEXT",
             "attachment_metadata": "ALTER TABLE mail_analyses ADD COLUMN attachment_metadata TEXT",
+            "body_preview": "ALTER TABLE mail_analyses ADD COLUMN body_preview TEXT",
             "next_agent": "ALTER TABLE mail_analyses ADD COLUMN next_agent TEXT",
             "requires_human_review": "ALTER TABLE mail_analyses ADD COLUMN requires_human_review INTEGER",
             "reason_for_human_review": "ALTER TABLE mail_analyses ADD COLUMN reason_for_human_review TEXT",
@@ -108,6 +111,7 @@ class Database:
             "ai_raw_response": "ALTER TABLE mail_analyses ADD COLUMN ai_raw_response TEXT",
             "ai_parse_status": "ALTER TABLE mail_analyses ADD COLUMN ai_parse_status TEXT",
             "ai_latency_ms": "ALTER TABLE mail_analyses ADD COLUMN ai_latency_ms INTEGER",
+            "analysis_attempts": "ALTER TABLE mail_analyses ADD COLUMN analysis_attempts INTEGER DEFAULT 0",
             "routed_at": "ALTER TABLE mail_analyses ADD COLUMN routed_at TEXT",
         }
         for column, statement in migrations.items():
@@ -145,14 +149,14 @@ class Database:
                 INSERT INTO mail_analyses (
                     created_at, source, received_at, outlook_message_id, message_id, internet_message_id, conversation_id,
                     source_folder, processing_status, direction, source_hash, import_batch_id,
-                    sender, recipient, subject, body, has_attachments,
+                    sender, recipient, subject, body_preview, body, has_attachments,
                     attachment_names, attachment_metadata, category, confidence, priority, sender_type,
                     insurer, customer_name, relation_number, policy_number,
                     claim_number, license_plate, amount, summary, suggested_action,
                     next_agent, human_review_required, requires_human_review, reason_for_human_review,
                     ai_model, ai_raw_response, ai_parse_status, ai_latency_ms, routed_at, raw_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     datetime.now().isoformat(timespec="seconds"),
@@ -170,6 +174,7 @@ class Database:
                     mail_data.get("sender"),
                     mail_data.get("recipient"),
                     mail_data.get("subject"),
+                    mail_data.get("body_preview"),
                     mail_data.get("body"),
                     int(bool(mail_data.get("has_attachments"))),
                     mail_data.get("attachment_names"),
@@ -200,6 +205,138 @@ class Database:
                 ),
             )
             return int(cursor.lastrowid)
+
+    def update_processing_status(
+        self,
+        analysis_id: int,
+        status: str,
+        details: str | None = None,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE mail_analyses
+                SET processing_status = ?,
+                    routed_at = CASE WHEN ? IN ('routed', 'needs_human', 'ignored', 'ai_timeout', 'completed', 'moved_or_archived', 'deleted_or_not_found') THEN ? ELSE routed_at END
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    status,
+                    datetime.now().isoformat(timespec="seconds"),
+                    analysis_id,
+                ),
+            )
+        if details:
+            self.log("Mail Intake Agent", "INFO", f"Status bijgewerkt naar {status}", details)
+
+    def get_next_queued_mail(self) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM mail_analyses
+                WHERE source_folder = 'inbox'
+                  AND direction = 'incoming'
+                  AND processing_status = 'queued'
+                ORDER BY received_at ASC, id ASC
+                LIMIT 1
+                """
+            ).fetchone()
+        return dict(row) if row else None
+
+    def update_mail_analysis_result(self, analysis_id: int, analysis: dict[str, Any]) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE mail_analyses
+                SET processing_status = ?,
+                    category = ?,
+                    confidence = ?,
+                    priority = ?,
+                    sender_type = ?,
+                    insurer = ?,
+                    customer_name = ?,
+                    relation_number = ?,
+                    policy_number = ?,
+                    claim_number = ?,
+                    license_plate = ?,
+                    amount = ?,
+                    summary = ?,
+                    suggested_action = ?,
+                    next_agent = ?,
+                    human_review_required = ?,
+                    requires_human_review = ?,
+                    reason_for_human_review = ?,
+                    ai_model = ?,
+                    ai_raw_response = ?,
+                    ai_parse_status = ?,
+                    ai_latency_ms = ?,
+                    analysis_attempts = COALESCE(analysis_attempts, 0) + 1,
+                    routed_at = ?,
+                    raw_json = ?
+                WHERE id = ?
+                """,
+                (
+                    analysis.get("processing_status"),
+                    analysis.get("categorie"),
+                    analysis.get("vertrouwen"),
+                    analysis.get("prioriteit"),
+                    analysis.get("afzender_type"),
+                    analysis.get("maatschappij"),
+                    analysis.get("klantnaam"),
+                    analysis.get("relatienummer"),
+                    analysis.get("polisnummer"),
+                    analysis.get("schadenummer"),
+                    analysis.get("kenteken"),
+                    analysis.get("bedrag"),
+                    analysis.get("samenvatting"),
+                    analysis.get("voorgestelde_actie"),
+                    analysis.get("volgende_agent"),
+                    int(bool(analysis.get("menselijke_controle_nodig"))),
+                    int(bool(analysis.get("requires_human_review", analysis.get("menselijke_controle_nodig")))),
+                    analysis.get("reason_for_human_review"),
+                    analysis.get("ai_model"),
+                    analysis.get("ai_raw_response"),
+                    analysis.get("ai_parse_status"),
+                    analysis.get("ai_latency_ms"),
+                    analysis.get("routed_at") or datetime.now().isoformat(timespec="seconds"),
+                    json.dumps(analysis, ensure_ascii=False),
+                    analysis_id,
+                ),
+            )
+
+    def active_outlook_messages(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, message_id, outlook_message_id, internet_message_id, subject, processing_status
+                FROM mail_analyses
+                WHERE source = 'Outlook'
+                  AND source_folder = 'inbox'
+                  AND direction = 'incoming'
+                  AND processing_status IN ('queued', 'analyzing', 'routed', 'needs_human', 'ai_timeout')
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def retry_analysis(self, analysis_id: int) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE mail_analyses
+                SET processing_status = 'queued',
+                    ai_parse_status = NULL,
+                    reason_for_human_review = NULL,
+                    next_agent = NULL
+                WHERE id = ?
+                  AND processing_status IN ('ai_timeout', 'needs_human')
+                """,
+                (analysis_id,),
+            )
 
     def is_duplicate_mail(self, mail_data: dict[str, Any]) -> bool:
         source_hash = mail_data.get("source_hash") or self.build_source_hash(mail_data)
@@ -242,13 +379,18 @@ class Database:
                 (datetime.now().isoformat(timespec="seconds"), agent_name, level, message, details),
             )
 
-    def dashboard_stats(self) -> dict[str, Any]:
+    def dashboard_stats(self, include_hidden: bool = False) -> dict[str, Any]:
         today = datetime.now().date().isoformat()
         with self.connect() as connection:
-            queue_filter = """
+            status_filter = (
+                ""
+                if include_hidden
+                else "AND processing_status IN ('queued', 'analyzing', 'routed', 'needs_human', 'ai_timeout')"
+            )
+            queue_filter = f"""
                 source_folder = 'inbox'
                 AND direction = 'incoming'
-                AND processing_status IN ('new', 'routed', 'needs_human', 'ai_unavailable')
+                {status_filter}
             """
             total = connection.execute(
                 f"SELECT COUNT(*) FROM mail_analyses WHERE {queue_filter}"
@@ -270,7 +412,7 @@ class Database:
                 """
             ).fetchall()
             latest = connection.execute(
-                """
+                f"""
                 SELECT id, created_at, source, source_folder, processing_status, direction,
                        received_at, sender, subject, category, confidence, summary,
                        suggested_action, next_agent, human_review_required,
@@ -279,7 +421,7 @@ class Database:
                 FROM mail_analyses
                 WHERE source_folder = 'inbox'
                   AND direction = 'incoming'
-                  AND processing_status IN ('new', 'routed', 'needs_human', 'ai_unavailable')
+                  {status_filter}
                 ORDER BY id DESC
                 LIMIT 10
                 """
@@ -339,10 +481,15 @@ class Database:
             "latest_errors": [dict(row) for row in latest_errors],
         }
 
-    def mail_analyses(self, limit: int = 100) -> list[dict[str, Any]]:
+    def mail_analyses(self, limit: int = 100, include_hidden: bool = False) -> list[dict[str, Any]]:
+        status_filter = (
+            ""
+            if include_hidden
+            else "AND processing_status IN ('queued', 'analyzing', 'routed', 'needs_human', 'ai_timeout')"
+        )
         with self.connect() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT id, created_at, source, received_at, sender, recipient, subject,
                        source_folder, processing_status, direction, category, confidence, priority,
                        suggested_action, next_agent, human_review_required, requires_human_review,
@@ -350,7 +497,7 @@ class Database:
                 FROM mail_analyses
                 WHERE source_folder = 'inbox'
                   AND direction = 'incoming'
-                  AND processing_status IN ('new', 'routed', 'needs_human', 'ai_unavailable')
+                  {status_filter}
                 ORDER BY id DESC
                 LIMIT ?
                 """,

@@ -6,7 +6,12 @@
         <p class="eyebrow">Mail Intake</p>
         <h1>Mail Analyses</h1>
     </div>
-    <span class="status-chip online"><i class="ti ti-database"></i>{{ stats.total_analyses }} opgeslagen</span>
+    <div class="hero-actions">
+        <a class="button ghost" href="{{ url_for('mail_analyses', show_hidden=0 if show_hidden else 1) }}">
+            <i class="ti ti-filter"></i>{{ "Actieve workflow tonen" if show_hidden else "Verborgen / afgehandeld tonen" }}
+        </a>
+        <span class="status-chip online"><i class="ti ti-database"></i>{{ stats.total_analyses }} zichtbaar</span>
+    </div>
 </section>
 
 <section class="panel">
@@ -28,6 +33,7 @@
                         <th>Volgende agent</th>
                         <th>Controle</th>
                         <th>Reden controle</th>
+                        <th>Actie</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -46,6 +52,15 @@
                             <td>{{ item.next_agent or "-" }}</td>
                             <td>{{ "Ja" if item.requires_human_review or item.human_review_required else "Nee" }}</td>
                             <td>{{ item.reason_for_human_review or "-" }}</td>
+                            <td>
+                                {% if item.processing_status == "ai_timeout" %}
+                                    <form method="post" action="{{ url_for('retry_mail_analysis', analysis_id=item.id) }}">
+                                        <button type="submit"><i class="ti ti-refresh"></i>Opnieuw analyseren</button>
+                                    </form>
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
                         </tr>
                     {% endfor %}
                 </tbody>

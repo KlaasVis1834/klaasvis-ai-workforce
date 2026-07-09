@@ -49,7 +49,12 @@
                 <p class="eyebrow">Inbox verwerkingsqueue</p>
                 <h2>Inkomende e-mails</h2>
             </div>
-            <a href="{{ url_for('mail_analyses') }}" class="text-link">Alle analyses</a>
+            <div class="button-row">
+                <a href="{{ url_for('dashboard', show_hidden=0 if show_hidden else 1) }}" class="text-link">
+                    {{ "Actieve workflow tonen" if show_hidden else "Verborgen / afgehandeld tonen" }}
+                </a>
+                <a href="{{ url_for('mail_analyses') }}" class="text-link">Alle analyses</a>
+            </div>
         </div>
         {% if stats.latest_analyses %}
             <div class="table-wrap">
@@ -103,6 +108,7 @@
         <div class="agent-mini-list">
             <div><span class="dot ok"></span><strong>Mail Intake Agent</strong><small>actief</small></div>
             <div><span class="dot cyan"></span><strong>Mailbox Monitor</strong><small>{{ "online" if monitor_status.running else "offline" }}</small></div>
+            <div><span class="dot cyan"></span><strong>Ollama Worker</strong><small>{{ "online" if ai_worker_status.running else "offline" }}</small></div>
             <div><span class="dot amber"></span><strong>Outlook</strong><small>{{ outlook_status.status }}</small></div>
         </div>
     </article>
@@ -123,6 +129,22 @@
         {% else %}
             <p class="empty">Nog geen categorieen beschikbaar.</p>
         {% endif %}
+    </article>
+
+    <article class="panel">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Queue</p>
+                <h2>Statussen</h2>
+            </div>
+        </div>
+        <div class="category-list">
+            <div><span>queued</span><strong>wacht op AI</strong></div>
+            <div><span>analyzing</span><strong>Ollama leest mail</strong></div>
+            <div><span>routed</span><strong>doorgestuurd</strong></div>
+            <div><span>needs_human</span><strong>controle nodig</strong></div>
+            <div><span>ai_timeout</span><strong>opnieuw analyseren</strong></div>
+        </div>
     </article>
 
     <article class="panel wide">
