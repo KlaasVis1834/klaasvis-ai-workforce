@@ -367,7 +367,10 @@ def enqueue_documents_for_mail(mail_row: dict, analysis: dict) -> int:
 
 WAARDEMETER_HEADER_ALIASES = {
     "customer_name": {"klant", "klantnaam", "relatie", "relatienaam", "naam", "verzekeringnemer"},
+    "address": {"adres", "straat", "woonadres", "risicoadres"},
+    "email": {"email", "e-mail", "emailadres", "mail"},
     "policy_number": {"polis", "polisnummer", "polnr", "policynumber", "policy_number"},
+    "branche": {"branche", "branch", "verzekering", "product"},
     "meter_type": {"soort", "type", "soortwaardemeter", "soort_waardemeter", "waardemeter", "meter"},
     "request_date": {"datum", "datumverzoek", "datum_verzoek", "verzoekdatum", "aanvraagdatum"},
     "portal_status": {"status", "nh1816status", "portalstatus", "portal_status"},
@@ -504,9 +507,10 @@ def import_waardemeter_items(items: list[dict[str, Any]]) -> dict[str, int]:
             waardemeter_id = database.save_waardemeter(analysis)
             if waardemeter_id:
                 imported += 1
-                database.log("Waardemeter Agent", "INFO", "Conceptmail gemaakt", analysis.get("policy_number"))
-                database.log("Waardemeter Agent", "INFO", "ANVA-memo voorbereid", analysis.get("policy_number"))
-                database.log("Waardemeter Agent", "INFO", "Agendataak voorbereid", analysis.get("policy_number"))
+                if analysis.get("task_type") == "WAARDEMETER_REQUEST":
+                    database.log("Waardemeter Agent", "INFO", "AI Queue taak aangemaakt", analysis.get("policy_number"))
+                else:
+                    database.log("Waardemeter Agent", "INFO", "Waardemeter historie opgeslagen", analysis.get("policy_number"))
             else:
                 duplicates += 1
         except Exception as exc:
@@ -521,8 +525,11 @@ def import_nh1816_fetch_items(items: list[dict[str, Any]], fetched_at: str) -> d
         mapped = map_waardemeter_row(
             {
                 "klantnaam": item.get("klantnaam") or item.get("customer_name") or "",
+                "adres": item.get("adres") or item.get("address") or "",
+                "email": item.get("email") or "",
                 "polisnummer": item.get("polisnummer") or item.get("policy_number") or "",
-                "soort": item.get("meter_type") or "",
+                "branche": item.get("branche") or "",
+                "soort": item.get("meter_type") or item.get("branche") or "",
                 "datum verzoek": item.get("request_date") or "",
                 "status": item.get("status") or item.get("portal_status") or "",
             },
@@ -532,6 +539,7 @@ def import_nh1816_fetch_items(items: list[dict[str, Any]], fetched_at: str) -> d
         mapped["raw_json"] = item.get("raw_json") or item
         mapped["fetched_at"] = fetched_at
         mapped["action_button_present"] = bool(item.get("action_button_present"))
+        mapped["row_state"] = item.get("row_state") or "unknown"
         prepared.append(mapped)
     return import_waardemeter_items(prepared)
 
@@ -675,12 +683,12 @@ def waardemeter_approve(waardemeter_id: int):
         return redirect(url_for("waardemeters"))
     database.update_waardemeter_status(
         waardemeter_id,
-        "handmatig_afvinken_nh1816",
-        "Akkoord gegeven; handmatig afvinken NH1816 vereist",
+        "handmatig_verwerken_nodig",
+        "Akkoord gegeven; exacte NH1816 klantregel mag handmatig verwerkt worden",
     )
     database.log("Waardemeter Agent", "INFO", "Akkoord gegeven", item.get("policy_number"))
-    database.log("Waardemeter Agent", "INFO", "Handmatig afvinken vereist", item.get("policy_number"))
-    flash("Akkoord geregistreerd. NH1816 moet nog handmatig worden afgevinkt.", "success")
+    database.log("Waardemeter Agent", "INFO", "Handmatig verwerken vereist", item.get("policy_number"))
+    flash("Akkoord geregistreerd. Verwerk nu alleen de exacte geselecteerde klantregel handmatig in NH1816.", "success")
     return redirect(url_for("waardemeters"))
 
 
@@ -692,11 +700,11 @@ def waardemeter_mark_nh1816_done(waardemeter_id: int):
         return redirect(url_for("waardemeters"))
     database.update_waardemeter_status(
         waardemeter_id,
-        "afgerond",
-        "NH1816 handmatig afgevinkt",
+        "verwerkt_in_nh1816",
+        "NH1816 handmatig verwerkt",
     )
-    database.log("Waardemeter Agent", "INFO", "NH1816 handmatig afgevinkt", item.get("policy_number"))
-    flash("Waardemeter afgerond na handmatige NH1816-afvinkactie.", "success")
+    database.log("Waardemeter Agent", "INFO", "NH1816 handmatig verwerkt", item.get("policy_number"))
+    flash("Waardemeter gemarkeerd als verwerkt in NH1816.", "success")
     return redirect(url_for("waardemeters"))
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import re
 from typing import Any
 
 
@@ -166,6 +167,8 @@ class NH1816PortalService:
             raw_text = " | ".join(value for value in values if value)
             mapped = self._map_row(headers, values, raw_text)
             mapped["action_button_present"] = bool(row.find(["button", "a", "input"]))
+            row_state = self._row_state(row)
+            mapped["row_state"] = self._status_state(mapped.get("status", "")) if row_state == "unknown" else row_state
             rows.append(mapped)
         return rows, headers
 
@@ -180,6 +183,7 @@ class NH1816PortalService:
                         {
                             "raw_text": text,
                             "status": "openstaand",
+                            "row_state": self._row_state(element),
                             "action_button_present": bool(element.find(["button", "a", "input"])),
                         }
                     )
@@ -187,7 +191,7 @@ class NH1816PortalService:
                 return rows
         body_text = soup.get_text(" ", strip=True)
         if body_text:
-            return [{"raw_text": body_text[:4000], "status": "parsing_onzeker", "action_button_present": False}]
+            return [{"raw_text": body_text[:4000], "status": "parsing_onzeker", "row_state": "unknown", "action_button_present": False}]
         return []
 
     def _map_row(self, headers: list[str], values: list[str], raw_text: str) -> dict[str, Any]:
@@ -195,8 +199,11 @@ class NH1816PortalService:
         normalized = {self._normalize_header(key): value for key, value in row.items()}
         return {
             "klantnaam": self._first_value(normalized, ["klantnaam", "klant", "relatie", "verzekeringnemer", "naam"]),
+            "adres": self._first_value(normalized, ["adres", "straat", "woonadres", "risicoadres"]),
+            "email": self._first_value(normalized, ["email", "emailadres", "e-mail", "mail"]),
             "polisnummer": self._first_value(normalized, ["polisnummer", "polis", "polnr", "policynumber"]),
-            "meter_type": self._first_value(normalized, ["soort", "type", "waardemeter", "meter", "soortwaardemeter"]),
+            "branche": self._first_value(normalized, ["branche", "branch", "verzekering", "product"]),
+            "meter_type": self._first_value(normalized, ["soort", "type", "waardemeter", "meter", "soortwaardemeter", "branche"]),
             "request_date": self._first_value(normalized, ["datumverzoek", "verzoekdatum", "datum", "aanvraagdatum"]),
             "status": self._first_value(normalized, ["status", "portalstatus", "nh1816status"]) or "openstaand",
             "raw_text": raw_text,
@@ -215,3 +222,33 @@ class NH1816PortalService:
     def _looks_like_value_meter(self, text: str) -> bool:
         lowered = text.lower()
         return "waardemeter" in lowered or "inboedel" in lowered or "herbouw" in lowered or "opstal" in lowered
+
+    def _row_state(self, element: Any) -> str:
+        marker = " ".join(
+            [
+                " ".join(element.get("class", [])) if hasattr(element, "get") else "",
+                str(element.get("style", "")) if hasattr(element, "get") else "",
+                str(element.get("data-status", "")) if hasattr(element, "get") else "",
+                element.get_text(" ", strip=True) if hasattr(element, "get_text") else "",
+            ]
+        ).lower()
+        if "groen" in marker or "green" in marker or "success" in marker or "verwerkt" in marker:
+            return "processed"
+        if "grijs" in marker or "grey" in marker or "gray" in marker or "nieuw" in marker or "openstaand" in marker:
+            return "open"
+        style_color = re.search(r"background(?:-color)?\s*:\s*([^;]+)", marker)
+        if style_color:
+            color = style_color.group(1)
+            if "green" in color or "#0" in color or "rgb(0" in color:
+                return "processed"
+            if "gray" in color or "grey" in color or "rgb(128" in color or "#ccc" in color or "#ddd" in color:
+                return "open"
+        return "unknown"
+
+    def _status_state(self, value: str) -> str:
+        lowered = (value or "").lower()
+        if "verwerkt" in lowered or "afgerond" in lowered or "groen" in lowered:
+            return "processed"
+        if "open" in lowered or "nieuw" in lowered or "grijs" in lowered:
+            return "open"
+        return "unknown"

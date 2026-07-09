@@ -22,7 +22,10 @@
         </div>
         <dl class="result-list">
             <div><dt>Klantnaam</dt><dd>{{ item.customer_name or "-" }}</dd></div>
+            <div><dt>Adres</dt><dd>{{ item.address or "-" }}</dd></div>
+            <div><dt>E-mail</dt><dd>{{ item.email or "-" }}</dd></div>
             <div><dt>Polisnummer</dt><dd>{{ item.policy_number or "-" }}</dd></div>
+            <div><dt>Branche</dt><dd>{{ item.branche or "-" }}</dd></div>
             <div><dt>Soort meter</dt><dd>{{ item.meter_type or "-" }}</dd></div>
             <div><dt>Maatschappij</dt><dd>{{ item.insurer or "NH1816" }}</dd></div>
             <div><dt>Datum verzoek</dt><dd>{{ item.request_date or "-" }}</dd></div>
@@ -39,14 +42,14 @@
             </div>
         </div>
         <div class="button-row">
-            {% if item.status not in ["handmatig_afvinken_nh1816", "afgerond"] %}
+            {% if item.status in ["nieuw_verzoek", "wacht_op_akkoord", "conceptmail_klaar", "anva_memo_klaar", "anva_agenda_klaar"] %}
                 <form method="post" action="{{ url_for('waardemeter_approve', waardemeter_id=item.id) }}">
                     <button type="submit"><i class="ti ti-check"></i>Akkoord verwerken</button>
                 </form>
             {% endif %}
-            {% if item.status == "handmatig_afvinken_nh1816" %}
+            {% if item.status == "handmatig_verwerken_nodig" %}
                 <form method="post" action="{{ url_for('waardemeter_mark_nh1816_done', waardemeter_id=item.id) }}">
-                    <button type="submit"><i class="ti ti-circle-check"></i>Markeer NH1816 handmatig afgevinkt</button>
+                    <button type="submit"><i class="ti ti-circle-check"></i>Markeer NH1816 verwerkt</button>
                 </form>
             {% endif %}
         </div>
@@ -54,37 +57,18 @@
     </article>
 </section>
 
-<section class="panel" id="conceptmail">
+<section class="panel" id="queue">
     <div class="panel-header">
         <div>
-            <p class="eyebrow">Conceptmail</p>
-            <h2>{{ item.concept_email_subject or "Concept" }}</h2>
-        </div>
-    </div>
-    <pre class="json-output">{{ item.concept_email_body or "-" }}</pre>
-</section>
-
-<section class="panel" id="memo">
-    <div class="panel-header">
-        <div>
-            <p class="eyebrow">ANVA</p>
-            <h2>Conceptmemo</h2>
-        </div>
-    </div>
-    <pre class="json-output">{{ item.anva_memo or "-" }}</pre>
-</section>
-
-<section class="panel" id="agenda">
-    <div class="panel-header">
-        <div>
-            <p class="eyebrow">Rappel</p>
-            <h2>Concept agendataak</h2>
+            <p class="eyebrow">AI Queue</p>
+            <h2>{{ item.task_type or "Geen actieve taak" }}</h2>
         </div>
     </div>
     <dl class="result-list">
-        <div><dt>Taak</dt><dd>{{ item.agenda_task or "-" }}</dd></div>
-        <div><dt>Rappeldatum</dt><dd>{{ item.agenda_due_date or "-" }}</dd></div>
+        <div><dt>Doelagenten</dt><dd>{{ item.target_agent or "-" }}</dd></div>
+        <div><dt>Taakstatus</dt><dd>{{ item.task_status or "-" }}</dd></div>
     </dl>
+    <pre class="json-output">{{ item.task_payload or "-" }}</pre>
 </section>
 
 <section class="panel">

@@ -169,10 +169,14 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     source TEXT,
                     klantnaam TEXT,
+                    adres TEXT,
+                    email TEXT,
                     polisnummer TEXT,
+                    branche TEXT,
                     meter_type TEXT,
                     request_date TEXT,
                     status TEXT,
+                    row_state TEXT,
                     raw_text TEXT,
                     raw_json TEXT,
                     fetched_at TEXT,
@@ -184,12 +188,30 @@ class Database:
                     agenda_task TEXT,
                     agenda_due_date TEXT,
                     source_hash TEXT,
+                    task_id INTEGER,
                     created_at TEXT NOT NULL,
                     updated_at TEXT
                 )
                 """
             )
             self._migrate_waardemeter_items(connection)
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT,
+                    task_type TEXT NOT NULL,
+                    source_agent TEXT,
+                    target_agent TEXT,
+                    payload TEXT NOT NULL,
+                    status TEXT DEFAULT 'waiting_for_next_agent',
+                    source_record_type TEXT,
+                    source_record_id INTEGER
+                )
+                """
+            )
+            self._migrate_ai_tasks(connection)
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS waardemeter_logs (
@@ -259,10 +281,14 @@ class Database:
         migrations = {
             "source": "ALTER TABLE waardemeter_items ADD COLUMN source TEXT",
             "klantnaam": "ALTER TABLE waardemeter_items ADD COLUMN klantnaam TEXT",
+            "adres": "ALTER TABLE waardemeter_items ADD COLUMN adres TEXT",
+            "email": "ALTER TABLE waardemeter_items ADD COLUMN email TEXT",
             "polisnummer": "ALTER TABLE waardemeter_items ADD COLUMN polisnummer TEXT",
+            "branche": "ALTER TABLE waardemeter_items ADD COLUMN branche TEXT",
             "meter_type": "ALTER TABLE waardemeter_items ADD COLUMN meter_type TEXT",
             "request_date": "ALTER TABLE waardemeter_items ADD COLUMN request_date TEXT",
             "status": "ALTER TABLE waardemeter_items ADD COLUMN status TEXT",
+            "row_state": "ALTER TABLE waardemeter_items ADD COLUMN row_state TEXT",
             "raw_text": "ALTER TABLE waardemeter_items ADD COLUMN raw_text TEXT",
             "raw_json": "ALTER TABLE waardemeter_items ADD COLUMN raw_json TEXT",
             "fetched_at": "ALTER TABLE waardemeter_items ADD COLUMN fetched_at TEXT",
@@ -274,6 +300,7 @@ class Database:
             "agenda_task": "ALTER TABLE waardemeter_items ADD COLUMN agenda_task TEXT",
             "agenda_due_date": "ALTER TABLE waardemeter_items ADD COLUMN agenda_due_date TEXT",
             "source_hash": "ALTER TABLE waardemeter_items ADD COLUMN source_hash TEXT",
+            "task_id": "ALTER TABLE waardemeter_items ADD COLUMN task_id INTEGER",
             "created_at": "ALTER TABLE waardemeter_items ADD COLUMN created_at TEXT",
             "updated_at": "ALTER TABLE waardemeter_items ADD COLUMN updated_at TEXT",
         }
@@ -287,6 +314,25 @@ class Database:
             WHERE source_hash IS NOT NULL AND source_hash != ''
             """
         )
+
+    def _migrate_ai_tasks(self, connection: sqlite3.Connection) -> None:
+        existing_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(ai_tasks)").fetchall()
+        }
+        migrations = {
+            "updated_at": "ALTER TABLE ai_tasks ADD COLUMN updated_at TEXT",
+            "task_type": "ALTER TABLE ai_tasks ADD COLUMN task_type TEXT",
+            "source_agent": "ALTER TABLE ai_tasks ADD COLUMN source_agent TEXT",
+            "target_agent": "ALTER TABLE ai_tasks ADD COLUMN target_agent TEXT",
+            "payload": "ALTER TABLE ai_tasks ADD COLUMN payload TEXT",
+            "status": "ALTER TABLE ai_tasks ADD COLUMN status TEXT DEFAULT 'waiting_for_next_agent'",
+            "source_record_type": "ALTER TABLE ai_tasks ADD COLUMN source_record_type TEXT",
+            "source_record_id": "ALTER TABLE ai_tasks ADD COLUMN source_record_id INTEGER",
+        }
+        for column, statement in migrations.items():
+            if column not in existing_columns:
+                connection.execute(statement)
 
     def _migrate_document_analyses(self, connection: sqlite3.Connection) -> None:
         existing_columns = {
@@ -762,25 +808,29 @@ class Database:
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO waardemeter_items (
-                    source, klantnaam, polisnummer, meter_type, request_date,
-                    status, raw_text, raw_json, fetched_at, processing_status,
+                    source, klantnaam, adres, email, polisnummer, branche, meter_type, request_date,
+                    status, row_state, raw_text, raw_json, fetched_at, processing_status,
                     proposed_action, concept_email_subject, concept_email_body,
                     anva_memo, agenda_task, agenda_due_date, source_hash,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.get("source", "Import"),
                     item.get("customer_name") or item.get("klantnaam"),
+                    item.get("address") or item.get("adres"),
+                    item.get("email"),
                     item.get("policy_number") or item.get("polisnummer"),
+                    item.get("branche"),
                     item.get("meter_type"),
                     item.get("request_date"),
                     item.get("portal_status") or item.get("status"),
+                    item.get("row_state"),
                     item.get("raw_text"),
                     json.dumps(item.get("raw_json") or {}, ensure_ascii=False),
                     item.get("fetched_at"),
-                    item.get("processing_status", item.get("status", "concepten_klaar")),
+                    item.get("processing_status", item.get("status", "nieuw_verzoek")),
                     item.get("proposed_action"),
                     item.get("concept_email_subject"),
                     item.get("concept_email_body"),
@@ -795,23 +845,78 @@ class Database:
             if cursor.rowcount:
                 waardemeter_id = int(cursor.lastrowid)
                 imported = True
+                if item.get("task_type") == "WAARDEMETER_REQUEST":
+                    task_cursor = connection.execute(
+                        """
+                        INSERT INTO ai_tasks (
+                            created_at, updated_at, task_type, source_agent, target_agent,
+                            payload, status, source_record_type, source_record_id
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            now,
+                            now,
+                            "WAARDEMETER_REQUEST",
+                            "Waardemeter Agent",
+                            "Communicatie Agent, ANVA Agent",
+                            json.dumps(item.get("task_payload") or {}, ensure_ascii=False),
+                            "waiting_for_next_agent",
+                            "waardemeter_items",
+                            waardemeter_id,
+                        ),
+                    )
+                    task_id = int(task_cursor.lastrowid)
+                    connection.execute(
+                        "UPDATE waardemeter_items SET task_id = ? WHERE id = ?",
+                        (task_id, waardemeter_id),
+                    )
             else:
                 waardemeter_id = 0
         if imported:
             self.log_waardemeter(waardemeter_id, "INFO", "Waardemeter item geimporteerd", item.get("policy_number"))
         return waardemeter_id
 
+    def create_ai_task(self, task: dict[str, Any]) -> int:
+        now = datetime.now().isoformat(timespec="seconds")
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO ai_tasks (
+                    created_at, updated_at, task_type, source_agent, target_agent,
+                    payload, status, source_record_type, source_record_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    now,
+                    now,
+                    task.get("task_type"),
+                    task.get("source_agent"),
+                    task.get("target_agent"),
+                    json.dumps(task.get("payload") or {}, ensure_ascii=False),
+                    task.get("status", "waiting_for_next_agent"),
+                    task.get("source_record_type"),
+                    task.get("source_record_id"),
+                ),
+            )
+            return int(cursor.lastrowid)
+
     def waardemeters(self, limit: int = 200) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT id, source,
+                SELECT w.id, w.source,
                        klantnaam AS customer_name,
+                       adres AS address,
+                       email,
                        polisnummer AS policy_number,
+                       branche,
                        meter_type,
                        'NH1816' AS insurer,
                        request_date,
-                       status AS portal_status,
+                       w.status AS portal_status,
+                       row_state,
                        processing_status AS status,
                        raw_text,
                        raw_json,
@@ -822,10 +927,16 @@ class Database:
                        anva_memo,
                        agenda_task,
                        agenda_due_date,
-                       created_at,
-                       updated_at
-                FROM waardemeter_items
-                ORDER BY id DESC
+                       w.created_at,
+                       w.updated_at,
+                       task_id,
+                       t.task_type,
+                       t.payload AS task_payload,
+                       t.status AS task_status,
+                       t.target_agent
+                FROM waardemeter_items w
+                LEFT JOIN ai_tasks t ON t.id = w.task_id
+                ORDER BY w.id DESC
                 LIMIT ?
                 """,
                 (limit,),
@@ -836,13 +947,17 @@ class Database:
         with self.connect() as connection:
             row = connection.execute(
                 """
-                SELECT id, source,
+                SELECT w.id, w.source,
                        klantnaam AS customer_name,
+                       adres AS address,
+                       email,
                        polisnummer AS policy_number,
+                       branche,
                        meter_type,
                        'NH1816' AS insurer,
                        request_date,
-                       status AS portal_status,
+                       w.status AS portal_status,
+                       row_state,
                        processing_status AS status,
                        raw_text,
                        raw_json,
@@ -853,10 +968,16 @@ class Database:
                        anva_memo,
                        agenda_task,
                        agenda_due_date,
-                       created_at,
-                       updated_at
-                FROM waardemeter_items
-                WHERE id = ?
+                       w.created_at,
+                       w.updated_at,
+                       task_id,
+                       t.task_type,
+                       t.payload AS task_payload,
+                       t.status AS task_status,
+                       t.target_agent
+                FROM waardemeter_items w
+                LEFT JOIN ai_tasks t ON t.id = w.task_id
+                WHERE w.id = ?
                 """,
                 (waardemeter_id,),
             ).fetchone()
@@ -879,17 +1000,17 @@ class Database:
             open_total = connection.execute(
                 """
                 SELECT COUNT(*) FROM waardemeter_items
-                WHERE processing_status NOT IN ('afgerond', 'fout')
+                WHERE processing_status NOT IN ('verwerkt_in_nh1816', 'fout')
                 """
             ).fetchone()[0]
             waiting = connection.execute(
-                "SELECT COUNT(*) FROM waardemeter_items WHERE processing_status IN ('wacht_op_akkoord', 'concepten_klaar')"
+                "SELECT COUNT(*) FROM waardemeter_items WHERE processing_status IN ('wacht_op_akkoord', 'nieuw_verzoek')"
             ).fetchone()[0]
             completed = connection.execute(
-                "SELECT COUNT(*) FROM waardemeter_items WHERE processing_status = 'afgerond'"
+                "SELECT COUNT(*) FROM waardemeter_items WHERE processing_status = 'verwerkt_in_nh1816'"
             ).fetchone()[0]
             manual_nh1816 = connection.execute(
-                "SELECT COUNT(*) FROM waardemeter_items WHERE processing_status = 'handmatig_afvinken_nh1816'"
+                "SELECT COUNT(*) FROM waardemeter_items WHERE processing_status = 'handmatig_verwerken_nodig'"
             ).fetchone()[0]
             last_fetch = connection.execute(
                 "SELECT MAX(fetched_at) FROM waardemeter_items WHERE source = 'NH1816 portal'"
