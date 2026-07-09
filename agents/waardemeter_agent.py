@@ -93,6 +93,8 @@ class WaardemeterAgent(BaseAgent):
                 or input_data.get("nh1816 status")
                 or ""
             ),
+            "row_css_class": self.clean_text(input_data.get("row_css_class") or input_data.get("row_class") or ""),
+            "background_color": self.clean_text(input_data.get("background_color") or input_data.get("row_background_color") or ""),
             "raw_text": self.clean_text(input_data.get("raw_text") or ""),
             "raw_json": input_data.get("raw_json") or {},
             "fetched_at": input_data.get("fetched_at"),
@@ -118,14 +120,14 @@ class WaardemeterAgent(BaseAgent):
 
     def normalize_row_state(self, value: str) -> str:
         lowered = self.clean_text(value).lower()
-        if "groen" in lowered or "green" in lowered or "processed" in lowered or "verwerkt" in lowered or "afgerond" in lowered:
+        if "groen" in lowered or "green" in lowered or "processed" in lowered:
             return "processed"
-        if "grijs" in lowered or "grey" in lowered or "gray" in lowered or "open" in lowered or "nieuw" in lowered or not lowered:
+        if "grijs" in lowered or "grey" in lowered or "gray" in lowered or "open" in lowered or not lowered:
             return "open"
         return lowered
 
     def processing_status(self, item: dict[str, Any]) -> str:
-        if item.get("row_state") == "processed" or item.get("portal_status") == "behandeld":
+        if item.get("row_state") == "processed" or item.get("portal_status") == "verwerkt":
             return "verwerkt_in_nh1816"
         return "nieuw_verzoek"
 

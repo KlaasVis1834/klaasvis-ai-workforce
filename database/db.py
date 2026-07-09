@@ -179,6 +179,8 @@ class Database:
                     handled_date TEXT,
                     status TEXT,
                     row_state TEXT,
+                    row_css_class TEXT,
+                    background_color TEXT,
                     raw_text TEXT,
                     raw_json TEXT,
                     fetched_at TEXT,
@@ -293,6 +295,8 @@ class Database:
             "handled_date": "ALTER TABLE waardemeter_items ADD COLUMN handled_date TEXT",
             "status": "ALTER TABLE waardemeter_items ADD COLUMN status TEXT",
             "row_state": "ALTER TABLE waardemeter_items ADD COLUMN row_state TEXT",
+            "row_css_class": "ALTER TABLE waardemeter_items ADD COLUMN row_css_class TEXT",
+            "background_color": "ALTER TABLE waardemeter_items ADD COLUMN background_color TEXT",
             "raw_text": "ALTER TABLE waardemeter_items ADD COLUMN raw_text TEXT",
             "raw_json": "ALTER TABLE waardemeter_items ADD COLUMN raw_json TEXT",
             "fetched_at": "ALTER TABLE waardemeter_items ADD COLUMN fetched_at TEXT",
@@ -835,6 +839,8 @@ class Database:
                         handled_date = ?,
                         status = ?,
                         row_state = ?,
+                        row_css_class = ?,
+                        background_color = ?,
                         raw_text = ?,
                         raw_json = ?,
                         fetched_at = ?,
@@ -861,6 +867,8 @@ class Database:
                         item.get("handled_date"),
                         item.get("portal_status") or item.get("status"),
                         item.get("row_state"),
+                        item.get("row_css_class") or item.get("row_class"),
+                        item.get("background_color") or item.get("row_background_color"),
                         item.get("raw_text"),
                         json.dumps(item.get("raw_json") or {}, ensure_ascii=False),
                         item.get("fetched_at"),
@@ -900,18 +908,27 @@ class Database:
                         "UPDATE waardemeter_items SET task_id = ? WHERE id = ?",
                         (int(task_cursor.lastrowid), waardemeter_id),
                     )
+                elif item.get("processing_status") == "verwerkt_in_nh1816" and existing["task_id"]:
+                    connection.execute(
+                        """
+                        UPDATE ai_tasks
+                        SET status = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        ("verwerkt_in_nh1816", now, int(existing["task_id"])),
+                    )
                 return waardemeter_id
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO waardemeter_items (
                     source, klantnaam, adres, email, polisnummer, branche, meter_type, request_date,
                     expiry_date, handled_date,
-                    status, row_state, raw_text, raw_json, fetched_at, processing_status,
+                    status, row_state, row_css_class, background_color, raw_text, raw_json, fetched_at, processing_status,
                     proposed_action, concept_email_subject, concept_email_body,
                     anva_memo, agenda_task, agenda_due_date, source_hash,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.get("source", "Import"),
@@ -926,6 +943,8 @@ class Database:
                     item.get("handled_date"),
                     item.get("portal_status") or item.get("status"),
                     item.get("row_state"),
+                    item.get("row_css_class") or item.get("row_class"),
+                    item.get("background_color") or item.get("row_background_color"),
                     item.get("raw_text"),
                     json.dumps(item.get("raw_json") or {}, ensure_ascii=False),
                     item.get("fetched_at"),
@@ -1009,7 +1028,7 @@ class Database:
             params.append("openstaand")
         elif status_filter == "behandeld":
             filter_sql = "WHERE w.status = ?"
-            params.append("behandeld")
+            params.append("verwerkt")
         params.append(limit)
         with self.connect() as connection:
             rows = connection.execute(
@@ -1027,6 +1046,8 @@ class Database:
                        handled_date,
                        w.status AS portal_status,
                        row_state,
+                       row_css_class,
+                       background_color,
                        processing_status AS status,
                        raw_text,
                        raw_json,
@@ -1071,6 +1092,8 @@ class Database:
                        handled_date,
                        w.status AS portal_status,
                        row_state,
+                       row_css_class,
+                       background_color,
                        processing_status AS status,
                        raw_text,
                        raw_json,

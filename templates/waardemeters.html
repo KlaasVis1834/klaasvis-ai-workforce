@@ -93,7 +93,12 @@
                             <td><span class="pill amber">{{ item.meter_type }}</span></td>
                             <td class="mono">{{ item.expiry_date or item.request_date or "-" }}</td>
                             <td class="mono">{{ item.handled_date or "-" }}</td>
-                            <td><span class="pill {{ 'green' if item.portal_status == 'behandeld' else 'cyan' }}">{{ item.portal_status }}</span></td>
+                            <td>
+                                <span class="pill {{ 'green' if item.portal_status == 'verwerkt' else 'cyan' }}">{{ item.portal_status }}</span>
+                                {% if item.background_color %}
+                                    <br><small class="mono">{{ item.background_color }}</small>
+                                {% endif %}
+                            </td>
                             <td class="mono">{{ item.fetched_at or "-" }}</td>
                             <td>
                                 {% if item.task_type %}

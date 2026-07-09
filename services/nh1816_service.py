@@ -208,10 +208,12 @@ class NH1816PortalService:
                     return {
                         className: typeof row.className === 'string' ? row.className : '',
                         style: row.getAttribute('style') || '',
+                        bgColor: row.getAttribute('bgcolor') || '',
                         dataStatus: row.getAttribute('data-status') || '',
                         backgroundColor: style.backgroundColor || '',
                         color: style.color || '',
                         cellClassNames: cells.map((cell) => typeof cell.className === 'string' ? cell.className : ''),
+                        cellBgColors: cells.map((cell) => cell.getAttribute('bgcolor') || ''),
                         cellBackgroundColors: cells.map((cell) => window.getComputedStyle(cell).backgroundColor || ''),
                         cellStyles: cells.map((cell) => cell.getAttribute('style') || '')
                     };
@@ -301,21 +303,20 @@ class NH1816PortalService:
                     [
                         str(meta.get("className") or ""),
                         str(meta.get("style") or ""),
+                        str(meta.get("bgColor") or ""),
                         str(meta.get("dataStatus") or ""),
                         str(meta.get("backgroundColor") or ""),
                         " ".join(str(value or "") for value in meta.get("cellClassNames") or []),
+                        " ".join(str(value or "") for value in meta.get("cellBgColors") or []),
                         " ".join(str(value or "") for value in meta.get("cellBackgroundColors") or []),
                         " ".join(str(value or "") for value in meta.get("cellStyles") or []),
-                        raw_text,
                     ]
                 )
             )
-            if row_state == "unknown":
-                row_state = self._status_state(mapped.get("status", ""))
             mapped["row_state"] = row_state
             mapped["status"] = self._portal_status(row_state)
-            mapped["row_class"] = meta.get("className")
-            mapped["row_background_color"] = meta.get("backgroundColor")
+            mapped["row_css_class"] = meta.get("className")
+            mapped["background_color"] = meta.get("backgroundColor") or meta.get("bgColor")
             mapped["raw_json"] = {**(mapped.get("raw_json") or {}), "_row_meta": meta, "_cells": values}
             mapped["action_button_present"] = False
             self._validate_dom_row(mapped)
@@ -376,13 +377,15 @@ class NH1816PortalService:
 
     def _row_state_from_marker(self, marker: str) -> str:
         marker = (marker or "").lower()
-        if "groen" in marker or "green" in marker or "success" in marker or "verwerkt" in marker or "behandeld" in marker:
+        if "groen" in marker or "green" in marker or "success" in marker:
             return "processed"
-        if "grijs" in marker or "grey" in marker or "gray" in marker or "nieuw" in marker or "openstaand" in marker:
+        if "grijs" in marker or "grey" in marker or "gray" in marker:
             return "open"
         color_match = re.search(r"(?:background(?:-color)?\s*:\s*)?(rgba?\([^)]+\)|#[0-9a-f]{3,8}|green|grey|gray)", marker)
         if color_match:
             color = color_match.group(1)
+            if color.startswith("#e3eec6") or color.startswith("#ffffbf"):
+                return "processed"
             rgb = self._parse_rgb(color)
             if not rgb:
                 rgb = self._parse_hex_color(color)
@@ -393,8 +396,6 @@ class NH1816PortalService:
                 if abs(red - green) <= 18 and abs(green - blue) <= 18 and 90 <= red <= 235:
                     return "open"
             if color == "green":
-                return "processed"
-            if color.startswith("#e3eec6"):
                 return "processed"
             if color in {"gray", "grey"} or color.startswith("#ccc") or color.startswith("#ddd") or color.startswith("#eee"):
                 return "open"
@@ -412,7 +413,7 @@ class NH1816PortalService:
         if row_state == "open":
             return "openstaand"
         if row_state == "processed":
-            return "behandeld"
+            return "verwerkt"
         raise RuntimeError("NH1816 rijstatus kon niet uit de DOM-kleur worden bepaald.")
 
     def _parse_rgb(self, value: str) -> tuple[int, int, int] | None:

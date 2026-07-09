@@ -551,6 +551,8 @@ def import_nh1816_fetch_items(items: list[dict[str, Any]], fetched_at: str) -> d
         mapped["fetched_at"] = fetched_at
         mapped["action_button_present"] = bool(item.get("action_button_present"))
         mapped["row_state"] = item.get("row_state") or "unknown"
+        mapped["row_css_class"] = item.get("row_css_class") or item.get("row_class") or ""
+        mapped["background_color"] = item.get("background_color") or item.get("row_background_color") or ""
         prepared.append(mapped)
     return import_waardemeter_items(prepared)
 
