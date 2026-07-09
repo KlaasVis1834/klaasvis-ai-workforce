@@ -123,18 +123,29 @@ class NH1816PortalService:
             return
 
         if username_selector:
+            page.wait_for_selector(username_selector, state="visible", timeout=30000)
+        if password_selector:
+            page.wait_for_selector(password_selector, state="visible", timeout=30000)
+        self._save_screenshot(page, "nh1816_step_1_login_loaded.png")
+
+        if username_selector:
             page.fill(username_selector, self.username)
         if password_selector:
             page.fill(password_selector, self.password)
+        self._save_screenshot(page, "nh1816_step_2_credentials_filled.png")
 
         button_selector = self._first_visible(
             page,
             [
                 "button[type='submit']",
                 "input[type='submit']",
+                "input[type='button']",
                 "button:has-text('Inloggen')",
                 "button:has-text('Login')",
                 "button:has-text('Aanmelden')",
+                "input[value*='Inloggen' i]",
+                "input[value*='Login' i]",
+                "input[value*='Aanmelden' i]",
             ],
         )
         if button_selector:
@@ -146,15 +157,12 @@ class NH1816PortalService:
             page.wait_for_load_state("networkidle", timeout=30000)
         except timeout_error:
             page.wait_for_load_state("domcontentloaded", timeout=30000)
+        self._save_screenshot(page, "nh1816_step_3_after_submit.png")
         if self._mfa_required(page):
-            raise RuntimeError("MFA vereist")
+            raise RuntimeError(self._login_failure_detail(page, "MFA vereist"))
         if self._login_rejected(page):
-            screenshot_path = self.debug_dir / "nh1816_login_failed.png"
-            try:
-                page.screenshot(path=str(screenshot_path), full_page=True)
-            except Exception:
-                pass
-            raise RuntimeError("Loginpagina geladen maar credentials geweigerd")
+            self._save_screenshot(page, "nh1816_login_failed.png")
+            raise RuntimeError(self._login_failure_detail(page, "Loginpagina geladen maar credentials geweigerd"))
 
     def _first_visible(self, page: Any, selectors: list[str]) -> str | None:
         for selector in selectors:
@@ -450,7 +458,18 @@ class NH1816PortalService:
 
     def _mfa_required(self, page: Any) -> bool:
         text = self._safe_body_text(page).lower()
-        markers = ["mfa", "2fa", "tweestaps", "authenticator", "verificatiecode", "beveiligingscode"]
+        markers = [
+            "mfa",
+            "2fa",
+            "tweestaps",
+            "twee-staps",
+            "authenticator",
+            "verificatiecode",
+            "beveiligingscode",
+            "sms-code",
+            "one-time",
+            "eenmalige code",
+        ]
         return any(marker in text for marker in markers)
 
     def _login_rejected(self, page: Any) -> bool:
@@ -460,7 +479,18 @@ class NH1816PortalService:
             has_password = page.locator("input[type='password']").count() > 0
         except Exception:
             has_password = False
-        markers = ["ongeldig", "incorrect", "mislukt", "invalid", "denied", "geweigerd", "wachtwoord"]
+        markers = [
+            "ongeldig",
+            "incorrect",
+            "mislukt",
+            "invalid",
+            "denied",
+            "geweigerd",
+            "verkeerd wachtwoord",
+            "onbekende gebruikersnaam",
+            "inloggen is niet gelukt",
+            "login failed",
+        ]
         return has_password and any(marker in text for marker in markers)
 
     def _safe_body_text(self, page: Any) -> str:
@@ -468,6 +498,93 @@ class NH1816PortalService:
             return str(page.locator("body").inner_text(timeout=1500))
         except Exception:
             return ""
+
+    def _save_screenshot(self, page: Any, filename: str) -> str | None:
+        path = self.debug_dir / filename
+        try:
+            page.screenshot(path=str(path), full_page=True)
+            return str(path)
+        except Exception:
+            return None
+
+    def _masked_username(self) -> str:
+        username = self.username or ""
+        if "@" in username:
+            local, domain = username.split("@", 1)
+            masked_local = local[:2] + "***" if len(local) > 2 else "***"
+            return f"{masked_local}@{domain}"
+        if len(username) <= 2:
+            return "***"
+        return f"{username[:2]}***"
+
+    def _sanitize_secret_text(self, value: str) -> str:
+        text = value or ""
+        if self.password:
+            text = text.replace(self.password, "[password-hidden]")
+        if self.username:
+            text = text.replace(self.username, self._masked_username())
+        return text
+
+    def _login_error_text(self, page: Any) -> str:
+        try:
+            candidates = page.evaluate(
+                """
+                () => {
+                    const visible = (el) => {
+                        const rect = el.getBoundingClientRect();
+                        const style = window.getComputedStyle(el);
+                        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+                    };
+                    const selectors = [
+                        '.error', '.errors', '.alert', '.alert-danger', '.validation-summary-errors',
+                        '#error', '#errors', '[class*="error" i]', '[class*="fout" i]',
+                        '[class*="melding" i]', '[id*="error" i]', '[id*="fout" i]'
+                    ];
+                    const texts = [];
+                    for (const selector of selectors) {
+                        for (const element of Array.from(document.querySelectorAll(selector)).filter(visible)) {
+                            const text = (element.innerText || element.textContent || '').trim().replace(/\\s+/g, ' ');
+                            if (text) texts.push(text);
+                        }
+                    }
+                    const bodyText = (document.body?.innerText || '').trim().replace(/\\s+/g, '\\n');
+                    return { texts, bodyText };
+                }
+                """
+            )
+        except Exception:
+            return ""
+        texts = [str(text).strip() for text in candidates.get("texts", []) if str(text).strip()]
+        if texts:
+            return self._sanitize_secret_text(" | ".join(dict.fromkeys(texts)))
+        body_text = str(candidates.get("bodyText") or "")
+        markers = [
+            "ongeldig",
+            "incorrect",
+            "mislukt",
+            "invalid",
+            "denied",
+            "geweigerd",
+            "verkeerd wachtwoord",
+            "onbekende gebruikersnaam",
+            "verificatiecode",
+            "authenticator",
+        ]
+        for line in body_text.splitlines():
+            cleaned = line.strip()
+            if cleaned and any(marker in cleaned.lower() for marker in markers):
+                return self._sanitize_secret_text(cleaned)
+        return ""
+
+    def _login_failure_detail(self, page: Any, reason: str) -> str:
+        error_text = self._login_error_text(page) or "geen fouttekst gevonden"
+        return (
+            f"{reason}. "
+            f"Username={self._masked_username()}; "
+            f"MFA={'ja' if self._mfa_required(page) else 'nee'}; "
+            f"URL na submit={getattr(page, 'url', '')}; "
+            f"Fouttekst={error_text}"
+        )
 
     def _failure_message(self, page: Any, exc: Exception) -> str:
         reason = str(exc)
@@ -478,9 +595,11 @@ class NH1816PortalService:
         except Exception:
             url = ""
         if "mfa vereist" in lowered_reason or self._mfa_required(page):
-            return "MFA vereist"
+            return self._login_failure_detail(page, "MFA vereist")
         if "credentials geweigerd" in lowered_reason or self._login_rejected(page):
-            return "Loginpagina geladen maar credentials geweigerd"
+            if "username=" in lowered_reason and "fouttekst=" in lowered_reason:
+                return self._sanitize_secret_text(reason)
+            return self._login_failure_detail(page, "Loginpagina geladen maar credentials geweigerd")
         if "tabel gevonden maar kolommen" in lowered_reason:
             return f"Tabel gevonden maar kolommen niet herkend. Debugbestanden zijn opgeslagen in storage/debug. Detail: {reason}"
         if "waardemetertabel niet gevonden" in lowered_reason:
