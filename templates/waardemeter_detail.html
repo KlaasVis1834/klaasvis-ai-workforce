@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Waardemeter Detail - Klaas Vis AI Workforce{% endblock %}
+{% block content %}
+<section class="hero-bar">
+    <div>
+        <p class="eyebrow">NH1816 Waardemeter</p>
+        <h1>{{ item.customer_name or "Waardemeter" }}</h1>
+    </div>
+    <div class="hero-actions">
+        <span class="status-chip online"><i class="ti ti-home-stats"></i>{{ item.status }}</span>
+        <a class="button ghost" href="{{ url_for('waardemeters') }}"><i class="ti ti-arrow-left"></i>Terug</a>
+    </div>
+</section>
+
+<section class="dashboard-grid">
+    <article class="panel">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Item</p>
+                <h2>NH1816 gegevens</h2>
+            </div>
+        </div>
+        <dl class="result-list">
+            <div><dt>Klantnaam</dt><dd>{{ item.customer_name or "-" }}</dd></div>
+            <div><dt>Polisnummer</dt><dd>{{ item.policy_number or "-" }}</dd></div>
+            <div><dt>Soort meter</dt><dd>{{ item.meter_type or "-" }}</dd></div>
+            <div><dt>Maatschappij</dt><dd>{{ item.insurer or "NH1816" }}</dd></div>
+            <div><dt>Datum verzoek</dt><dd>{{ item.request_date or "-" }}</dd></div>
+            <div><dt>Status portaal</dt><dd>{{ item.portal_status or "-" }}</dd></div>
+        </dl>
+    </article>
+
+    <article class="panel">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Acties</p>
+                <h2>Handmatig proces</h2>
+            </div>
+        </div>
+        <div class="button-row">
+            {% if item.status not in ["handmatig_afvinken_nh1816", "afgerond"] %}
+                <form method="post" action="{{ url_for('waardemeter_approve', waardemeter_id=item.id) }}">
+                    <button type="submit"><i class="ti ti-check"></i>Akkoord verwerken</button>
+                </form>
+            {% endif %}
+            {% if item.status == "handmatig_afvinken_nh1816" %}
+                <form method="post" action="{{ url_for('waardemeter_mark_nh1816_done', waardemeter_id=item.id) }}">
+                    <button type="submit"><i class="ti ti-circle-check"></i>Markeer NH1816 handmatig afgevinkt</button>
+                </form>
+            {% endif %}
+        </div>
+        <p class="empty">Deze knoppen registreren alleen interne status. Er wordt niets automatisch in ANVA of NH1816 verwerkt.</p>
+    </article>
+</section>
+
+<section class="panel" id="conceptmail">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">Conceptmail</p>
+            <h2>{{ item.concept_email_subject or "Concept" }}</h2>
+        </div>
+    </div>
+    <pre class="json-output">{{ item.concept_email_body or "-" }}</pre>
+</section>
+
+<section class="panel" id="memo">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">ANVA</p>
+            <h2>Conceptmemo</h2>
+        </div>
+    </div>
+    <pre class="json-output">{{ item.anva_memo or "-" }}</pre>
+</section>
+
+<section class="panel" id="agenda">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">Rappel</p>
+            <h2>Concept agendataak</h2>
+        </div>
+    </div>
+    <dl class="result-list">
+        <div><dt>Taak</dt><dd>{{ item.agenda_task or "-" }}</dd></div>
+        <div><dt>Rappeldatum</dt><dd>{{ item.agenda_due_date or "-" }}</dd></div>
+    </dl>
+</section>
+{% endblock %}

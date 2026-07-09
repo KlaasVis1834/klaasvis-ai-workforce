@@ -137,6 +137,44 @@ class Database:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS waardemeters (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT,
+                    source TEXT DEFAULT 'Import',
+                    customer_name TEXT,
+                    policy_number TEXT,
+                    meter_type TEXT,
+                    insurer TEXT DEFAULT 'NH1816',
+                    request_date TEXT,
+                    portal_status TEXT,
+                    status TEXT DEFAULT 'nieuw',
+                    proposed_action TEXT,
+                    concept_email_subject TEXT,
+                    concept_email_body TEXT,
+                    anva_memo TEXT,
+                    agenda_task TEXT,
+                    agenda_due_date TEXT,
+                    source_hash TEXT,
+                    raw_json TEXT
+                )
+                """
+            )
+            self._migrate_waardemeters(connection)
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS waardemeter_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    waardemeter_id INTEGER,
+                    level TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    details TEXT
+                )
+                """
+            )
 
     def _migrate_mail_analyses(self, connection: sqlite3.Connection) -> None:
         existing_columns = {
@@ -233,6 +271,41 @@ class Database:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_document_attachment
             ON document_analyses(mail_analysis_id, attachment_id, document_name)
             WHERE document_name IS NOT NULL AND document_name != ''
+            """
+        )
+
+    def _migrate_waardemeters(self, connection: sqlite3.Connection) -> None:
+        existing_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(waardemeters)").fetchall()
+        }
+        migrations = {
+            "updated_at": "ALTER TABLE waardemeters ADD COLUMN updated_at TEXT",
+            "source": "ALTER TABLE waardemeters ADD COLUMN source TEXT DEFAULT 'Import'",
+            "customer_name": "ALTER TABLE waardemeters ADD COLUMN customer_name TEXT",
+            "policy_number": "ALTER TABLE waardemeters ADD COLUMN policy_number TEXT",
+            "meter_type": "ALTER TABLE waardemeters ADD COLUMN meter_type TEXT",
+            "insurer": "ALTER TABLE waardemeters ADD COLUMN insurer TEXT DEFAULT 'NH1816'",
+            "request_date": "ALTER TABLE waardemeters ADD COLUMN request_date TEXT",
+            "portal_status": "ALTER TABLE waardemeters ADD COLUMN portal_status TEXT",
+            "status": "ALTER TABLE waardemeters ADD COLUMN status TEXT DEFAULT 'nieuw'",
+            "proposed_action": "ALTER TABLE waardemeters ADD COLUMN proposed_action TEXT",
+            "concept_email_subject": "ALTER TABLE waardemeters ADD COLUMN concept_email_subject TEXT",
+            "concept_email_body": "ALTER TABLE waardemeters ADD COLUMN concept_email_body TEXT",
+            "anva_memo": "ALTER TABLE waardemeters ADD COLUMN anva_memo TEXT",
+            "agenda_task": "ALTER TABLE waardemeters ADD COLUMN agenda_task TEXT",
+            "agenda_due_date": "ALTER TABLE waardemeters ADD COLUMN agenda_due_date TEXT",
+            "source_hash": "ALTER TABLE waardemeters ADD COLUMN source_hash TEXT",
+            "raw_json": "ALTER TABLE waardemeters ADD COLUMN raw_json TEXT",
+        }
+        for column, statement in migrations.items():
+            if column not in existing_columns:
+                connection.execute(statement)
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_waardemeters_source_hash
+            ON waardemeters(source_hash)
+            WHERE source_hash IS NOT NULL AND source_hash != ''
             """
         )
 
@@ -611,6 +684,141 @@ class Database:
                 (
                     datetime.now().isoformat(timespec="seconds"),
                     document_id,
+                    level,
+                    message,
+                    details,
+                ),
+            )
+
+    def save_waardemeter(self, item: dict[str, Any]) -> int:
+        source_hash = item.get("source_hash") or self.build_waardemeter_hash(item)
+        now = datetime.now().isoformat(timespec="seconds")
+        imported = False
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO waardemeters (
+                    created_at, updated_at, source, customer_name, policy_number,
+                    meter_type, insurer, request_date, portal_status, status,
+                    proposed_action, concept_email_subject, concept_email_body,
+                    anva_memo, agenda_task, agenda_due_date, source_hash, raw_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    now,
+                    now,
+                    item.get("source", "Import"),
+                    item.get("customer_name"),
+                    item.get("policy_number"),
+                    item.get("meter_type"),
+                    item.get("insurer", "NH1816"),
+                    item.get("request_date"),
+                    item.get("portal_status"),
+                    item.get("status", "wacht_op_akkoord"),
+                    item.get("proposed_action"),
+                    item.get("concept_email_subject"),
+                    item.get("concept_email_body"),
+                    item.get("anva_memo"),
+                    item.get("agenda_task"),
+                    item.get("agenda_due_date"),
+                    source_hash,
+                    json.dumps(item, ensure_ascii=False),
+                ),
+            )
+            if cursor.rowcount:
+                waardemeter_id = int(cursor.lastrowid)
+                imported = True
+            else:
+                waardemeter_id = 0
+        if imported:
+            self.log_waardemeter(waardemeter_id, "INFO", "Waardemeter item geimporteerd", item.get("policy_number"))
+        return waardemeter_id
+
+    def waardemeters(self, limit: int = 200) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM waardemeters
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_waardemeter(self, waardemeter_id: int) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM waardemeters WHERE id = ?",
+                (waardemeter_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def update_waardemeter_status(self, waardemeter_id: int, status: str, message: str) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE waardemeters
+                SET status = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (status, datetime.now().isoformat(timespec="seconds"), waardemeter_id),
+            )
+        self.log_waardemeter(waardemeter_id, "INFO", message, status)
+
+    def waardemeter_stats(self) -> dict[str, Any]:
+        with self.connect() as connection:
+            open_total = connection.execute(
+                """
+                SELECT COUNT(*) FROM waardemeters
+                WHERE status NOT IN ('afgerond', 'fout')
+                """
+            ).fetchone()[0]
+            waiting = connection.execute(
+                "SELECT COUNT(*) FROM waardemeters WHERE status = 'wacht_op_akkoord'"
+            ).fetchone()[0]
+            completed = connection.execute(
+                "SELECT COUNT(*) FROM waardemeters WHERE status = 'afgerond'"
+            ).fetchone()[0]
+            manual_nh1816 = connection.execute(
+                "SELECT COUNT(*) FROM waardemeters WHERE status = 'handmatig_afvinken_nh1816'"
+            ).fetchone()[0]
+        return {
+            "open": open_total,
+            "waiting_approval": waiting,
+            "completed": completed,
+            "manual_nh1816": manual_nh1816,
+        }
+
+    def build_waardemeter_hash(self, item: dict[str, Any]) -> str:
+        hash_input = "|".join(
+            [
+                str(item.get("customer_name") or "").strip().lower(),
+                str(item.get("policy_number") or "").strip().lower(),
+                str(item.get("meter_type") or "").strip().lower(),
+                str(item.get("request_date") or "").strip().lower(),
+            ]
+        )
+        return hashlib.sha256(hash_input.encode("utf-8")).hexdigest()
+
+    def log_waardemeter(
+        self,
+        waardemeter_id: int | None,
+        level: str,
+        message: str,
+        details: str | None = None,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO waardemeter_logs (created_at, waardemeter_id, level, message, details)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    datetime.now().isoformat(timespec="seconds"),
+                    waardemeter_id,
                     level,
                     message,
                     details,

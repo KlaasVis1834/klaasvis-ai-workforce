@@ -37,6 +37,20 @@
         </dl>
     </article>
 
+    <article class="agent-card active-agent">
+        <div class="agent-card-head">
+            <span class="agent-icon active"><i class="ti ti-home-stats"></i></span>
+            <span class="status-chip online">{{ waardemeter_agent.status }}</span>
+        </div>
+        <h2>{{ waardemeter_agent.naam }}</h2>
+        <p>{{ waardemeter_agent.omschrijving }}</p>
+        <dl>
+            <div><dt>Versie</dt><dd>{{ waardemeter_agent.versie }}</dd></div>
+            <div><dt>Model</dt><dd>{{ waardemeter_agent.model }}</dd></div>
+            <div><dt>Laatste activiteit</dt><dd>{{ waardemeter_agent.laatste_activiteit or "-" }}</dd></div>
+        </dl>
+    </article>
+
     {% for agent in future_agents %}
         <article class="agent-card">
             <div class="agent-card-head">

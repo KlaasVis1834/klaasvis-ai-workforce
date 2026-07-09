@@ -33,6 +33,9 @@
             <a href="{{ url_for('documents') }}" class="{{ 'active' if request.endpoint == 'documents' else '' }}">
                 <i class="ti ti-file-search"></i><span>Documenten</span>
             </a>
+            <a href="{{ url_for('waardemeters') }}" class="{{ 'active' if request.endpoint in ['waardemeters', 'waardemeters_import', 'waardemeter_detail'] else '' }}">
+                <i class="ti ti-home-stats"></i><span>Waardemeters</span>
+            </a>
             <a href="{{ url_for('agents') }}" class="{{ 'active' if request.endpoint == 'agents' else '' }}">
                 <i class="ti ti-robot"></i><span>Agents</span>
             </a>

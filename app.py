@@ -2,18 +2,23 @@ from __future__ import annotations
 
 import os
 import base64
+import csv
+import io
 import json
 import re
 import secrets
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+from xml.etree import ElementTree
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import HTTPException
 from dotenv import load_dotenv
 
-from agents import DocumentAgent, MailIntakeAgent
+from agents import DocumentAgent, MailIntakeAgent, WaardemeterAgent
 from database import Database
 from services import AIAnalysisWorker, MailboxMonitor, MicrosoftGraphService, OllamaService, TokenStore
 from services.microsoft_graph_service import create_pkce_pair
@@ -38,6 +43,9 @@ MICROSOFT_REDIRECT_URI = os.getenv("MICROSOFT_REDIRECT_URI", EXPECTED_MICROSOFT_
 if MICROSOFT_REDIRECT_URI != EXPECTED_MICROSOFT_REDIRECT_URI:
     MICROSOFT_REDIRECT_URI = EXPECTED_MICROSOFT_REDIRECT_URI
 ALLOWED_OUTLOOK_EMAIL = os.getenv("ALLOWED_OUTLOOK_EMAIL", "").strip().lower()
+NH1816_USERNAME = os.getenv("NH1816_USERNAME", "").strip()
+NH1816_PASSWORD = os.getenv("NH1816_PASSWORD", "").strip()
+NH1816_VALUE_METERS_URL = os.getenv("NH1816_VALUE_METERS_URL", "").strip()
 
 app = Flask(__name__)
 app.secret_key = APP_SECRET_KEY
@@ -56,6 +64,7 @@ ollama_service = OllamaService(
 )
 mail_agent = MailIntakeAgent(ollama_service, OLLAMA_MODEL)
 document_agent = DocumentAgent(ollama_service, OLLAMA_MODEL)
+waardemeter_agent = WaardemeterAgent()
 token_store = TokenStore("database/microsoft_token.json")
 graph_service = MicrosoftGraphService(
     MICROSOFT_TENANT_ID,
@@ -111,6 +120,15 @@ database.log(
 )
 database.log("Applicatie", "INFO", "Flask session secret loaded", startup_yes_no(bool(APP_SECRET_KEY)))
 database.log("Outlook", "INFO", "Sent learning mode", startup_yes_no(ENABLE_SENT_LEARNING))
+database.log(
+    "Waardemeter Agent",
+    "INFO",
+    "NH1816 config loaded",
+    (
+        f"credentials={startup_yes_no(bool(NH1816_USERNAME and NH1816_PASSWORD))} "
+        f"value_meters_url={startup_yes_no(bool(NH1816_VALUE_METERS_URL))}"
+    ),
+)
 
 
 def future_agents() -> list[dict]:
@@ -120,7 +138,6 @@ def future_agents() -> list[dict]:
         {"naam": "ANVA Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
         {"naam": "Polis Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
         {"naam": "Schade Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
-        {"naam": "Waardemeter Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
         {"naam": "Communicatie Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
         {"naam": "Compliance Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
     ]
@@ -134,6 +151,7 @@ def inject_settings() -> dict:
         "sent_learning_enabled": ENABLE_SENT_LEARNING,
         "ollama_timeout_seconds": OLLAMA_TIMEOUT_SECONDS,
         "ollama_body_char_limit": OLLAMA_BODY_CHAR_LIMIT,
+        "nh1816_value_meters_url": NH1816_VALUE_METERS_URL,
     }
 
 
@@ -338,6 +356,155 @@ def enqueue_documents_for_mail(mail_row: dict, analysis: dict) -> int:
     return queued
 
 
+WAARDEMETER_HEADER_ALIASES = {
+    "customer_name": {"klant", "klantnaam", "relatie", "relatienaam", "naam", "verzekeringnemer"},
+    "policy_number": {"polis", "polisnummer", "polnr", "policynumber", "policy_number"},
+    "meter_type": {"soort", "type", "soortwaardemeter", "soort_waardemeter", "waardemeter", "meter"},
+    "request_date": {"datum", "datumverzoek", "datum_verzoek", "verzoekdatum", "aanvraagdatum"},
+    "portal_status": {"status", "nh1816status", "portalstatus", "portal_status"},
+}
+
+
+def nh1816_config_status() -> dict[str, Any]:
+    return {
+        "username_present": bool(NH1816_USERNAME),
+        "password_present": bool(NH1816_PASSWORD),
+        "value_meters_url_present": bool(NH1816_VALUE_METERS_URL),
+        "value_meters_url": NH1816_VALUE_METERS_URL,
+        "automatic_portal_processing": False,
+    }
+
+
+def normalize_header(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (value or "").strip().lower())
+
+
+def map_waardemeter_row(row: dict[str, Any], source: str) -> dict[str, Any]:
+    mapped: dict[str, Any] = {"source": source}
+    normalized = {normalize_header(key): value for key, value in row.items()}
+    for target, aliases in WAARDEMETER_HEADER_ALIASES.items():
+        for alias in aliases:
+            if alias in normalized:
+                mapped[target] = normalized[alias]
+                break
+    if not mapped.get("meter_type"):
+        combined = " ".join(str(value or "") for value in row.values())
+        mapped["meter_type"] = combined
+    if not mapped.get("portal_status"):
+        mapped["portal_status"] = "openstaand"
+    return mapped
+
+
+def parse_csv_waardemeters(raw_data: bytes, source: str) -> list[dict[str, Any]]:
+    text = raw_data.decode("utf-8-sig", errors="ignore")
+    sample = text[:2048]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=";,	,")
+        reader = csv.DictReader(io.StringIO(text), dialect=dialect)
+    except csv.Error:
+        reader = csv.DictReader(io.StringIO(text), delimiter=";")
+    return [map_waardemeter_row(row, source) for row in reader if any(row.values())]
+
+
+def parse_xlsx_waardemeters(raw_data: bytes, source: str) -> list[dict[str, Any]]:
+    with zipfile.ZipFile(io.BytesIO(raw_data)) as workbook:
+        shared_strings = read_xlsx_shared_strings(workbook)
+        sheet_name = first_xlsx_sheet_name(workbook)
+        root = ElementTree.fromstring(workbook.read(sheet_name))
+    namespace = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    rows: list[list[str]] = []
+    for row in root.findall(".//a:sheetData/a:row", namespace):
+        values: list[str] = []
+        for cell in row.findall("a:c", namespace):
+            cell_index = xlsx_column_index(cell.attrib.get("r", ""))
+            while len(values) < cell_index:
+                values.append("")
+            values.append(read_xlsx_cell(cell, shared_strings, namespace))
+        if any(values):
+            rows.append(values)
+    if not rows:
+        return []
+    headers = [value or f"kolom_{index + 1}" for index, value in enumerate(rows[0])]
+    items = []
+    for values in rows[1:]:
+        row = {headers[index]: values[index] if index < len(values) else "" for index in range(len(headers))}
+        if any(row.values()):
+            items.append(map_waardemeter_row(row, source))
+    return items
+
+
+def read_xlsx_shared_strings(workbook: zipfile.ZipFile) -> list[str]:
+    try:
+        root = ElementTree.fromstring(workbook.read("xl/sharedStrings.xml"))
+    except KeyError:
+        return []
+    namespace = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    strings = []
+    for item in root.findall("a:si", namespace):
+        parts = [node.text or "" for node in item.findall(".//a:t", namespace)]
+        strings.append("".join(parts))
+    return strings
+
+
+def first_xlsx_sheet_name(workbook: zipfile.ZipFile) -> str:
+    names = [name for name in workbook.namelist() if name.startswith("xl/worksheets/sheet") and name.endswith(".xml")]
+    if not names:
+        raise ValueError("Geen werkblad gevonden in Excel-bestand.")
+    return sorted(names)[0]
+
+
+def read_xlsx_cell(cell: ElementTree.Element, shared_strings: list[str], namespace: dict[str, str]) -> str:
+    value = cell.find("a:v", namespace)
+    if value is None or value.text is None:
+        inline_text = cell.find(".//a:t", namespace)
+        return inline_text.text if inline_text is not None and inline_text.text else ""
+    raw_value = value.text
+    if cell.attrib.get("t") == "s":
+        try:
+            return shared_strings[int(raw_value)]
+        except (ValueError, IndexError):
+            return raw_value
+    return raw_value
+
+
+def xlsx_column_index(reference: str) -> int:
+    letters = re.sub(r"[^A-Z]", "", (reference or "").upper())
+    if not letters:
+        return 0
+    index = 0
+    for letter in letters:
+        index = index * 26 + (ord(letter) - ord("A") + 1)
+    return max(index - 1, 0)
+
+
+def parse_pasted_waardemeters(text: str, source: str) -> list[dict[str, Any]]:
+    raw = text.strip()
+    if not raw:
+        return []
+    return parse_csv_waardemeters(raw.encode("utf-8"), source)
+
+
+def import_waardemeter_items(items: list[dict[str, Any]]) -> dict[str, int]:
+    imported = 0
+    duplicates = 0
+    failed = 0
+    for item in items:
+        try:
+            analysis = waardemeter_agent.run(item)
+            waardemeter_id = database.save_waardemeter(analysis)
+            if waardemeter_id:
+                imported += 1
+                database.log("Waardemeter Agent", "INFO", "Conceptmail gemaakt", analysis.get("policy_number"))
+                database.log("Waardemeter Agent", "INFO", "ANVA-memo voorbereid", analysis.get("policy_number"))
+                database.log("Waardemeter Agent", "INFO", "Agendataak voorbereid", analysis.get("policy_number"))
+            else:
+                duplicates += 1
+        except Exception as exc:
+            failed += 1
+            database.log("Waardemeter Agent", "ERROR", "Waardemeter import mislukt", str(exc))
+    return {"imported": imported, "duplicates": duplicates, "failed": failed}
+
+
 @app.route("/")
 def dashboard():
     ollama_online = ollama_service.is_online()
@@ -359,6 +526,7 @@ def dashboard():
         document_worker_status=document_analysis_worker.snapshot(),
         stats=stats,
         document_stats=database.document_stats(),
+        waardemeter_stats=database.waardemeter_stats(),
         logs=database.latest_logs(10),
         show_hidden=show_hidden,
     )
@@ -370,6 +538,7 @@ def agents():
         "agents.html",
         mail_agent=mail_agent.metadata(),
         document_agent=document_agent.metadata(),
+        waardemeter_agent=waardemeter_agent.metadata(),
         future_agents=future_agents(),
     )
 
@@ -381,6 +550,96 @@ def documents():
         documents=database.document_analyses(100),
         document_stats=database.document_stats(),
     )
+
+
+@app.route("/waardemeters")
+def waardemeters():
+    return render_template(
+        "waardemeters.html",
+        waardemeters=database.waardemeters(200),
+        stats=database.waardemeter_stats(),
+        nh1816_config=nh1816_config_status(),
+    )
+
+
+@app.route("/waardemeters/import", methods=["GET", "POST"])
+def waardemeters_import():
+    if request.method == "GET":
+        return render_template("waardemeters_import.html", nh1816_config=nh1816_config_status())
+
+    items: list[dict[str, Any]] = []
+    upload = request.files.get("waardemeter_file")
+    pasted_rows = request.form.get("pasted_rows", "")
+    try:
+        if upload and upload.filename:
+            filename = upload.filename.lower()
+            raw_data = upload.read()
+            if filename.endswith(".csv"):
+                items.extend(parse_csv_waardemeters(raw_data, "CSV upload"))
+            elif filename.endswith(".xlsx"):
+                items.extend(parse_xlsx_waardemeters(raw_data, "Excel upload"))
+            else:
+                flash("Gebruik voorlopig CSV of Excel .xlsx voor import.", "error")
+                return redirect(url_for("waardemeters_import"))
+        if pasted_rows.strip():
+            items.extend(parse_pasted_waardemeters(pasted_rows, "Plak-import"))
+    except Exception as exc:
+        database.log("Waardemeter Agent", "ERROR", "Importbestand lezen mislukt", str(exc))
+        flash("Importbestand kon niet worden gelezen.", "error")
+        return redirect(url_for("waardemeters_import"))
+
+    if not items:
+        flash("Geen waardemeterregels gevonden om te importeren.", "error")
+        return redirect(url_for("waardemeters_import"))
+
+    result = import_waardemeter_items(items)
+    flash(
+        f"Import voltooid: {result['imported']} items, {result['duplicates']} duplicaten, {result['failed']} fouten.",
+        "success" if result["failed"] == 0 else "error",
+    )
+    return redirect(url_for("waardemeters"))
+
+
+@app.route("/waardemeters/<int:waardemeter_id>")
+def waardemeter_detail(waardemeter_id: int):
+    item = database.get_waardemeter(waardemeter_id)
+    if not item:
+        flash("Waardemeter item niet gevonden.", "error")
+        return redirect(url_for("waardemeters"))
+    return render_template("waardemeter_detail.html", item=item)
+
+
+@app.route("/waardemeters/<int:waardemeter_id>/approve", methods=["POST"])
+def waardemeter_approve(waardemeter_id: int):
+    item = database.get_waardemeter(waardemeter_id)
+    if not item:
+        flash("Waardemeter item niet gevonden.", "error")
+        return redirect(url_for("waardemeters"))
+    database.update_waardemeter_status(
+        waardemeter_id,
+        "handmatig_afvinken_nh1816",
+        "Akkoord gegeven; handmatig afvinken NH1816 vereist",
+    )
+    database.log("Waardemeter Agent", "INFO", "Akkoord gegeven", item.get("policy_number"))
+    database.log("Waardemeter Agent", "INFO", "Handmatig afvinken vereist", item.get("policy_number"))
+    flash("Akkoord geregistreerd. NH1816 moet nog handmatig worden afgevinkt.", "success")
+    return redirect(url_for("waardemeters"))
+
+
+@app.route("/waardemeters/<int:waardemeter_id>/mark-nh1816-done", methods=["POST"])
+def waardemeter_mark_nh1816_done(waardemeter_id: int):
+    item = database.get_waardemeter(waardemeter_id)
+    if not item:
+        flash("Waardemeter item niet gevonden.", "error")
+        return redirect(url_for("waardemeters"))
+    database.update_waardemeter_status(
+        waardemeter_id,
+        "afgerond",
+        "NH1816 handmatig afgevinkt",
+    )
+    database.log("Waardemeter Agent", "INFO", "NH1816 handmatig afgevinkt", item.get("policy_number"))
+    flash("Waardemeter afgerond na handmatige NH1816-afvinkactie.", "success")
+    return redirect(url_for("waardemeters"))
 
 
 @app.route("/mail-analyses")
@@ -937,6 +1196,7 @@ def api_status():
             "ai_worker": ai_analysis_worker.snapshot(),
             "document_worker": document_analysis_worker.snapshot(),
             "document_stats": database.document_stats(),
+            "waardemeter_stats": database.waardemeter_stats(),
             "stats": database.dashboard_stats(),
         }
     )

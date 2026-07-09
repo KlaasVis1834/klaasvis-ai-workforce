@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Waardemeters Import - Klaas Vis AI Workforce{% endblock %}
+{% block content %}
+<section class="hero-bar">
+    <div>
+        <p class="eyebrow">NH1816 Import</p>
+        <h1>Waardemeters importeren</h1>
+    </div>
+    <a class="button ghost" href="{{ url_for('waardemeters') }}"><i class="ti ti-arrow-left"></i>Terug</a>
+</section>
+
+<section class="dashboard-grid">
+    <form class="mail-form" method="post" enctype="multipart/form-data">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Bestand</p>
+                <h2>CSV of Excel upload</h2>
+            </div>
+        </div>
+        <label>
+            CSV of Excel .xlsx
+            <input type="file" name="waardemeter_file" accept=".csv,.xlsx">
+        </label>
+        <label>
+            Handmatig regels plakken
+            <textarea name="pasted_rows" rows="10" placeholder="klantnaam;polisnummer;soort waardemeter;datum verzoek;status"></textarea>
+        </label>
+        <button type="submit"><i class="ti ti-upload"></i>Importeer waardemeters</button>
+    </form>
+
+    <article class="panel">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Kolommen</p>
+                <h2>Ondersteund</h2>
+            </div>
+        </div>
+        <dl class="result-list">
+            <div><dt>Klant</dt><dd>klantnaam, klant, relatie</dd></div>
+            <div><dt>Polis</dt><dd>polisnummer, polis</dd></div>
+            <div><dt>Soort</dt><dd>inboedel, herbouwwaarde, opstal</dd></div>
+            <div><dt>Datum</dt><dd>datum verzoek, verzoekdatum</dd></div>
+            <div><dt>Status</dt><dd>status, portalstatus</dd></div>
+        </dl>
+    </article>
+</section>
+
+<section class="panel">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">Veiligheid</p>
+            <h2>NH1816-koppeling</h2>
+        </div>
+    </div>
+    <p class="empty">
+        De portaalgegevens worden alleen als aanwezig/niet aanwezig gecontroleerd. Wachtwoorden worden niet getoond,
+        niet gelogd en niet opgeslagen in SQLite. Automatisch afvinken in NH1816 staat uit.
+    </p>
+</section>
+{% endblock %}

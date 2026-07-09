@@ -45,6 +45,11 @@
         <strong>{{ document_stats.total }}</strong>
         <small>{{ document_stats.queued }} wacht op analyse</small>
     </article>
+    <article class="stat-card accent-green">
+        <div><span>Waardemeters</span><i class="ti ti-home-stats"></i></div>
+        <strong>{{ waardemeter_stats.open }}</strong>
+        <small>{{ waardemeter_stats.manual_nh1816 }} handmatig NH1816</small>
+    </article>
 </section>
 
 <section class="dashboard-grid">
@@ -115,7 +120,24 @@
             <div><span class="dot cyan"></span><strong>Mailbox Monitor</strong><small>{{ "online" if monitor_status.running else "offline" }}</small></div>
             <div><span class="dot cyan"></span><strong>Ollama Worker</strong><small>{{ "online" if ai_worker_status.running else "offline" }}</small></div>
             <div><span class="dot cyan"></span><strong>Document Agent</strong><small>{{ "online" if document_worker_status.running else "offline" }}</small></div>
+            <div><span class="dot ok"></span><strong>Waardemeter Agent</strong><small>actief</small></div>
             <div><span class="dot amber"></span><strong>Outlook</strong><small>{{ outlook_status.status }}</small></div>
+        </div>
+    </article>
+
+    <article class="panel">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">NH1816</p>
+                <h2>Waardemeters</h2>
+            </div>
+            <a href="{{ url_for('waardemeters') }}" class="text-link">Open</a>
+        </div>
+        <div class="category-list">
+            <div><span>Openstaand</span><strong>{{ waardemeter_stats.open }}</strong></div>
+            <div><span>Wacht op akkoord</span><strong>{{ waardemeter_stats.waiting_approval }}</strong></div>
+            <div><span>Handmatig afvinken</span><strong>{{ waardemeter_stats.manual_nh1816 }}</strong></div>
+            <div><span>Afgerond</span><strong>{{ waardemeter_stats.completed }}</strong></div>
         </div>
     </article>
 

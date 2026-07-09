@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Waardemeters - Klaas Vis AI Workforce{% endblock %}
+{% block content %}
+<section class="hero-bar">
+    <div>
+        <p class="eyebrow">NH1816 Waardemeter Agent</p>
+        <h1>Waardemeters</h1>
+    </div>
+    <div class="hero-actions">
+        <a class="button" href="{{ url_for('waardemeters_import') }}"><i class="ti ti-upload"></i>Importeren</a>
+        <span class="status-chip {{ 'online' if nh1816_config.value_meters_url_present else 'offline' }}">
+            <i class="ti ti-shield-lock"></i>NH1816 portaal handmatig
+        </span>
+    </div>
+</section>
+
+<section class="stat-grid">
+    <article class="stat-card accent-cyan">
+        <div><span>Openstaand</span><i class="ti ti-list-check"></i></div>
+        <strong>{{ stats.open }}</strong>
+        <small>niet afgeronde waardemeters</small>
+    </article>
+    <article class="stat-card accent-amber">
+        <div><span>Wacht op akkoord</span><i class="ti ti-user-check"></i></div>
+        <strong>{{ stats.waiting_approval }}</strong>
+        <small>concepten wachten op akkoord</small>
+    </article>
+    <article class="stat-card accent-green">
+        <div><span>Afgerond</span><i class="ti ti-circle-check"></i></div>
+        <strong>{{ stats.completed }}</strong>
+        <small>handmatig verwerkt</small>
+    </article>
+    <article class="stat-card accent-amber">
+        <div><span>NH1816 afvinken</span><i class="ti ti-click"></i></div>
+        <strong>{{ stats.manual_nh1816 }}</strong>
+        <small>handmatige portaalactie vereist</small>
+    </article>
+</section>
+
+<section class="panel">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">Werkvoorraad</p>
+            <h2>Openstaande NH1816 waardemeters</h2>
+        </div>
+        <a class="text-link" href="{{ url_for('waardemeters_import') }}">Nieuwe import</a>
+    </div>
+
+    {% if waardemeters %}
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Status</th>
+                        <th>Klantnaam</th>
+                        <th>Polisnummer</th>
+                        <th>Soort meter</th>
+                        <th>Datum verzoek</th>
+                        <th>Voorgestelde actie</th>
+                        <th>Acties</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in waardemeters %}
+                        <tr>
+                            <td><span class="pill cyan">{{ item.status or "nieuw" }}</span></td>
+                            <td>{{ item.customer_name or "-" }}</td>
+                            <td>{{ item.policy_number or "-" }}</td>
+                            <td><span class="pill amber">{{ item.meter_type or "onbekend" }}</span></td>
+                            <td class="mono">{{ item.request_date or "-" }}</td>
+                            <td>{{ item.proposed_action or "-" }}</td>
+                            <td>
+                                <div class="button-row">
+                                    <a class="button ghost" href="{{ url_for('waardemeter_detail', waardemeter_id=item.id) }}#conceptmail">
+                                        <i class="ti ti-mail"></i>Bekijk conceptmail
+                                    </a>
+                                    <a class="button ghost" href="{{ url_for('waardemeter_detail', waardemeter_id=item.id) }}#memo">
+                                        <i class="ti ti-notes"></i>Bekijk ANVA-memo
+                                    </a>
+                                    <a class="button ghost" href="{{ url_for('waardemeter_detail', waardemeter_id=item.id) }}#agenda">
+                                        <i class="ti ti-calendar"></i>Bekijk agendataak
+                                    </a>
+                                    {% if item.status not in ["handmatig_afvinken_nh1816", "afgerond"] %}
+                                        <form method="post" action="{{ url_for('waardemeter_approve', waardemeter_id=item.id) }}">
+                                            <button type="submit"><i class="ti ti-check"></i>Akkoord verwerken</button>
+                                        </form>
+                                    {% endif %}
+                                    {% if item.status == "handmatig_afvinken_nh1816" %}
+                                        <form method="post" action="{{ url_for('waardemeter_mark_nh1816_done', waardemeter_id=item.id) }}">
+                                            <button type="submit"><i class="ti ti-circle-check"></i>Markeer NH1816 handmatig afgevinkt</button>
+                                        </form>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <p class="empty">Nog geen NH1816 waardemeters geimporteerd.</p>
+    {% endif %}
+</section>
+
+<section class="panel">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">Portaalonderzoek</p>
+            <h2>NH1816 status</h2>
+        </div>
+    </div>
+    <dl class="result-list">
+        <div><dt>URL aanwezig</dt><dd>{{ "Ja" if nh1816_config.value_meters_url_present else "Nee" }}</dd></div>
+        <div><dt>Gebruikersnaam aanwezig</dt><dd>{{ "Ja" if nh1816_config.username_present else "Nee" }}</dd></div>
+        <div><dt>Wachtwoord aanwezig</dt><dd>{{ "Ja" if nh1816_config.password_present else "Nee" }}</dd></div>
+        <div><dt>Automatisch afvinken</dt><dd>Uit</dd></div>
+        <div><dt>Veilige route nu</dt><dd>CSV, Excel of plak-import vanaf NH1816-export</dd></div>
+    </dl>
+</section>
+{% endblock %}
