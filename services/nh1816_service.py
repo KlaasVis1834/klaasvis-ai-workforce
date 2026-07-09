@@ -92,9 +92,7 @@ class NH1816PortalService:
                     )
                 except Exception:
                     pass
-                raise RuntimeError(
-                    "NH1816 ophalen mislukt. Debugbestanden zijn opgeslagen in storage/debug."
-                ) from exc
+                raise RuntimeError(self._failure_message(page, exc)) from exc
             finally:
                 context.close()
                 browser.close()
@@ -148,6 +146,15 @@ class NH1816PortalService:
             page.wait_for_load_state("networkidle", timeout=30000)
         except timeout_error:
             page.wait_for_load_state("domcontentloaded", timeout=30000)
+        if self._mfa_required(page):
+            raise RuntimeError("MFA vereist")
+        if self._login_rejected(page):
+            screenshot_path = self.debug_dir / "nh1816_login_failed.png"
+            try:
+                page.screenshot(path=str(screenshot_path), full_page=True)
+            except Exception:
+                pass
+            raise RuntimeError("Loginpagina geladen maar credentials geweigerd")
 
     def _first_visible(self, page: Any, selectors: list[str]) -> str | None:
         for selector in selectors:
@@ -201,6 +208,8 @@ class NH1816PortalService:
                         cellStyles: cells.map((cell) => cell.getAttribute('style') || '')
                     };
                 };
+                const directRows = (table) => Array.from(table.querySelectorAll(':scope > tbody > tr, :scope > tr')).filter(visible);
+                const directCells = (row) => Array.from(row.querySelectorAll(':scope > td, :scope > th')).filter(visible);
                 const tableScore = (headers) => {
                     const haystack = headers.join(' ').toLowerCase();
                     const needles = ['relatie', 'adres', 'email', 'branche', 'polis', 'behandeld'];
@@ -208,17 +217,30 @@ class NH1816PortalService:
                 };
                 const tables = Array.from(document.querySelectorAll('table')).filter(visible).map((table) => {
                     let headers = Array.from(table.querySelectorAll('thead th, thead td')).filter(visible).map(text);
+                    let headerIndex = -1;
+                    const rows = directRows(table);
                     if (!headers.length) {
-                        const first = Array.from(table.querySelectorAll('tr')).find((row) => visible(row) && row.querySelectorAll('th').length);
-                        if (first) headers = Array.from(first.querySelectorAll('th')).filter(visible).map(text);
+                        for (let index = 0; index < rows.length; index += 1) {
+                            const cells = directCells(rows[index]);
+                            const values = cells.map(text);
+                            if (tableScore(values) >= 4) {
+                                headers = values;
+                                headerIndex = index;
+                                break;
+                            }
+                        }
                     }
-                    return { table, headers, score: tableScore(headers) };
+                    if (headerIndex === -1 && headers.length) {
+                        headerIndex = rows.findIndex((row) => directCells(row).map(text).join(' ') === headers.join(' '));
+                    }
+                    return { table, headers, rows, headerIndex, score: tableScore(headers) };
                 }).sort((a, b) => b.score - a.score);
                 for (const table of tables) {
                     if (table.score < 4) continue;
                     const rows = [];
-                    for (const row of Array.from(table.table.querySelectorAll('tbody tr, tr')).filter(visible)) {
-                        const cells = Array.from(row.querySelectorAll('td')).filter(visible);
+                    const dataRows = table.rows.slice(Math.max(table.headerIndex + 1, 0));
+                    for (const row of dataRows) {
+                        const cells = directCells(row);
                         if (!cells.length) continue;
                         const values = cells.map(text);
                         if (!values.some((value) => value.length)) continue;
@@ -259,7 +281,7 @@ class NH1816PortalService:
         headers = [str(value or "").strip() for value in table_payload.get("headers", [])]
         if not headers:
             self._write_selector_debug(page, table_payload)
-            raise RuntimeError("NH1816 tabel gevonden, maar geen kolomkoppen uit de DOM gelezen.")
+            raise RuntimeError("Tabel gevonden maar kolommen niet herkend")
         items = []
         for row in table_payload.get("rows", []):
             values = [str(value or "").strip() for value in row.get("values", [])]
@@ -292,7 +314,7 @@ class NH1816PortalService:
             items.append(mapped)
         if not items:
             self._write_selector_debug(page, table_payload)
-            raise RuntimeError("NH1816 tabel gevonden, maar er zijn geen zichtbare datarijen gelezen.")
+            raise RuntimeError("Value meters pagina geladen maar tabel niet gevonden")
         return items, headers
 
     def _map_row(self, headers: list[str], values: list[str], raw_text: str) -> dict[str, Any]:
@@ -354,13 +376,17 @@ class NH1816PortalService:
         if color_match:
             color = color_match.group(1)
             rgb = self._parse_rgb(color)
+            if not rgb:
+                rgb = self._parse_hex_color(color)
             if rgb:
                 red, green, blue = rgb
-                if green > red + 25 and green > blue + 25:
+                if green > red and green > blue + 20:
                     return "processed"
                 if abs(red - green) <= 18 and abs(green - blue) <= 18 and 90 <= red <= 235:
                     return "open"
             if color == "green":
+                return "processed"
+            if color.startswith("#e3eec6"):
                 return "processed"
             if color in {"gray", "grey"} or color.startswith("#ccc") or color.startswith("#ddd") or color.startswith("#eee"):
                 return "open"
@@ -387,6 +413,20 @@ class NH1816PortalService:
             return None
         return int(match.group(1)), int(match.group(2)), int(match.group(3))
 
+    def _parse_hex_color(self, value: str) -> tuple[int, int, int] | None:
+        color = (value or "").strip().lower()
+        if not color.startswith("#"):
+            return None
+        hex_value = color[1:]
+        if len(hex_value) == 3:
+            hex_value = "".join(character * 2 for character in hex_value)
+        if len(hex_value) < 6:
+            return None
+        try:
+            return int(hex_value[0:2], 16), int(hex_value[2:4], 16), int(hex_value[4:6], 16)
+        except ValueError:
+            return None
+
     def _validate_dom_row(self, item: dict[str, Any]) -> None:
         required = {
             "klantnaam": "Relatie / klantnaam",
@@ -403,10 +443,51 @@ class NH1816PortalService:
         missing = [label for key, label in required.items() if not str(item.get(key) or "").strip()]
         if missing:
             raise RuntimeError(
-                "NH1816 tabelrij is niet compleet gelezen. Ontbrekende kolommen: "
+                "Tabel gevonden maar kolommen niet herkend. Ontbrekende kolommen: "
                 + ", ".join(missing)
                 + f". Rij: {item.get('raw_text')}"
             )
+
+    def _mfa_required(self, page: Any) -> bool:
+        text = self._safe_body_text(page).lower()
+        markers = ["mfa", "2fa", "tweestaps", "authenticator", "verificatiecode", "beveiligingscode"]
+        return any(marker in text for marker in markers)
+
+    def _login_rejected(self, page: Any) -> bool:
+        text = self._safe_body_text(page).lower()
+        has_password = False
+        try:
+            has_password = page.locator("input[type='password']").count() > 0
+        except Exception:
+            has_password = False
+        markers = ["ongeldig", "incorrect", "mislukt", "invalid", "denied", "geweigerd", "wachtwoord"]
+        return has_password and any(marker in text for marker in markers)
+
+    def _safe_body_text(self, page: Any) -> str:
+        try:
+            return str(page.locator("body").inner_text(timeout=1500))
+        except Exception:
+            return ""
+
+    def _failure_message(self, page: Any, exc: Exception) -> str:
+        reason = str(exc)
+        lowered_reason = reason.lower()
+        url = ""
+        try:
+            url = page.url
+        except Exception:
+            url = ""
+        if "mfa vereist" in lowered_reason or self._mfa_required(page):
+            return "MFA vereist"
+        if "credentials geweigerd" in lowered_reason or self._login_rejected(page):
+            return "Loginpagina geladen maar credentials geweigerd"
+        if "tabel gevonden maar kolommen" in lowered_reason:
+            return f"Tabel gevonden maar kolommen niet herkend. Debugbestanden zijn opgeslagen in storage/debug. Detail: {reason}"
+        if "waardemetertabel niet gevonden" in lowered_reason:
+            if "value-meters" in url:
+                return "Value meters pagina geladen maar tabel niet gevonden. Debugbestanden zijn opgeslagen in storage/debug."
+            return "Portal redirect werkt niet of value-meters pagina laadt niet. Debugbestanden zijn opgeslagen in storage/debug."
+        return f"NH1816 ophalen mislukt. Debugbestanden zijn opgeslagen in storage/debug. Detail: {reason}"
 
     def _selector_debug(self, page: Any) -> dict[str, Any]:
         return page.evaluate(
