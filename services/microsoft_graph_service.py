@@ -258,10 +258,11 @@ class MicrosoftGraphService:
         }
 
     def fetch_attachment_metadata(self, message_id: str) -> list[dict[str, Any]]:
-        params = {"$select": "name,contentType,size,isInline"}
+        params = {"$select": "id,name,contentType,size,isInline"}
         response = self._graph_get(f"/me/messages/{message_id}/attachments?{urlencode(params)}")
         return [
             {
+                "id": item.get("id"),
                 "name": item.get("name"),
                 "content_type": item.get("contentType"),
                 "size": item.get("size"),
@@ -269,6 +270,9 @@ class MicrosoftGraphService:
             }
             for item in response.get("value", [])
         ]
+
+    def fetch_attachment_content(self, message_id: str, attachment_id: str) -> dict[str, Any]:
+        return self._graph_get(f"/me/messages/{message_id}/attachments/{attachment_id}")
 
     def inbox_message_state(self, message_id: str) -> str:
         try:

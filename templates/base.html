@@ -30,6 +30,9 @@
             <a href="{{ url_for('mail_analyses') }}" class="{{ 'active' if request.endpoint == 'mail_analyses' else '' }}">
                 <i class="ti ti-inbox"></i><span>Mail Analyses</span>
             </a>
+            <a href="{{ url_for('documents') }}" class="{{ 'active' if request.endpoint == 'documents' else '' }}">
+                <i class="ti ti-file-search"></i><span>Documenten</span>
+            </a>
             <a href="{{ url_for('agents') }}" class="{{ 'active' if request.endpoint == 'agents' else '' }}">
                 <i class="ti ti-robot"></i><span>Agents</span>
             </a>

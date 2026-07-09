@@ -84,6 +84,59 @@ class Database:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS document_analyses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT,
+                    mail_analysis_id INTEGER,
+                    outlook_message_id TEXT,
+                    attachment_id TEXT,
+                    document_name TEXT,
+                    file_path TEXT,
+                    content_type TEXT,
+                    file_size INTEGER,
+                    document_kind TEXT,
+                    extracted_text TEXT,
+                    document_type TEXT,
+                    category TEXT,
+                    summary TEXT,
+                    confidence REAL,
+                    relation_proposal TEXT,
+                    policy_proposal TEXT,
+                    claim_proposal TEXT,
+                    customer_name TEXT,
+                    policy_number TEXT,
+                    claim_number TEXT,
+                    license_plate TEXT,
+                    insurer TEXT,
+                    document_date TEXT,
+                    amount TEXT,
+                    requires_human_review INTEGER,
+                    review_reason TEXT,
+                    status TEXT DEFAULT 'queued',
+                    ai_model TEXT,
+                    ai_raw_response TEXT,
+                    ai_parse_status TEXT,
+                    ai_latency_ms INTEGER,
+                    raw_json TEXT
+                )
+                """
+            )
+            self._migrate_document_analyses(connection)
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS document_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    document_id INTEGER,
+                    level TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    details TEXT
+                )
+                """
+            )
 
     def _migrate_mail_analyses(self, connection: sqlite3.Connection) -> None:
         existing_columns = {
@@ -132,6 +185,56 @@ class Database:
             """
         )
         connection.execute("DROP INDEX IF EXISTS idx_mail_analyses_source_hash")
+
+    def _migrate_document_analyses(self, connection: sqlite3.Connection) -> None:
+        existing_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(document_analyses)").fetchall()
+        }
+        migrations = {
+            "updated_at": "ALTER TABLE document_analyses ADD COLUMN updated_at TEXT",
+            "mail_analysis_id": "ALTER TABLE document_analyses ADD COLUMN mail_analysis_id INTEGER",
+            "outlook_message_id": "ALTER TABLE document_analyses ADD COLUMN outlook_message_id TEXT",
+            "attachment_id": "ALTER TABLE document_analyses ADD COLUMN attachment_id TEXT",
+            "document_name": "ALTER TABLE document_analyses ADD COLUMN document_name TEXT",
+            "file_path": "ALTER TABLE document_analyses ADD COLUMN file_path TEXT",
+            "content_type": "ALTER TABLE document_analyses ADD COLUMN content_type TEXT",
+            "file_size": "ALTER TABLE document_analyses ADD COLUMN file_size INTEGER",
+            "document_kind": "ALTER TABLE document_analyses ADD COLUMN document_kind TEXT",
+            "extracted_text": "ALTER TABLE document_analyses ADD COLUMN extracted_text TEXT",
+            "document_type": "ALTER TABLE document_analyses ADD COLUMN document_type TEXT",
+            "category": "ALTER TABLE document_analyses ADD COLUMN category TEXT",
+            "summary": "ALTER TABLE document_analyses ADD COLUMN summary TEXT",
+            "confidence": "ALTER TABLE document_analyses ADD COLUMN confidence REAL",
+            "relation_proposal": "ALTER TABLE document_analyses ADD COLUMN relation_proposal TEXT",
+            "policy_proposal": "ALTER TABLE document_analyses ADD COLUMN policy_proposal TEXT",
+            "claim_proposal": "ALTER TABLE document_analyses ADD COLUMN claim_proposal TEXT",
+            "customer_name": "ALTER TABLE document_analyses ADD COLUMN customer_name TEXT",
+            "policy_number": "ALTER TABLE document_analyses ADD COLUMN policy_number TEXT",
+            "claim_number": "ALTER TABLE document_analyses ADD COLUMN claim_number TEXT",
+            "license_plate": "ALTER TABLE document_analyses ADD COLUMN license_plate TEXT",
+            "insurer": "ALTER TABLE document_analyses ADD COLUMN insurer TEXT",
+            "document_date": "ALTER TABLE document_analyses ADD COLUMN document_date TEXT",
+            "amount": "ALTER TABLE document_analyses ADD COLUMN amount TEXT",
+            "requires_human_review": "ALTER TABLE document_analyses ADD COLUMN requires_human_review INTEGER",
+            "review_reason": "ALTER TABLE document_analyses ADD COLUMN review_reason TEXT",
+            "status": "ALTER TABLE document_analyses ADD COLUMN status TEXT DEFAULT 'queued'",
+            "ai_model": "ALTER TABLE document_analyses ADD COLUMN ai_model TEXT",
+            "ai_raw_response": "ALTER TABLE document_analyses ADD COLUMN ai_raw_response TEXT",
+            "ai_parse_status": "ALTER TABLE document_analyses ADD COLUMN ai_parse_status TEXT",
+            "ai_latency_ms": "ALTER TABLE document_analyses ADD COLUMN ai_latency_ms INTEGER",
+            "raw_json": "ALTER TABLE document_analyses ADD COLUMN raw_json TEXT",
+        }
+        for column, statement in migrations.items():
+            if column not in existing_columns:
+                connection.execute(statement)
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_document_attachment
+            ON document_analyses(mail_analysis_id, attachment_id, document_name)
+            WHERE document_name IS NOT NULL AND document_name != ''
+            """
+        )
 
     def status(self) -> str:
         try:
@@ -336,6 +439,182 @@ class Database:
                   AND processing_status IN ('ai_timeout', 'needs_human')
                 """,
                 (analysis_id,),
+            )
+
+    def save_document_queue_item(self, document_data: dict[str, Any]) -> int:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO document_analyses (
+                    created_at, updated_at, mail_analysis_id, outlook_message_id, attachment_id,
+                    document_name, file_path, content_type, file_size, document_kind,
+                    status, ai_parse_status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'queued')
+                """,
+                (
+                    datetime.now().isoformat(timespec="seconds"),
+                    datetime.now().isoformat(timespec="seconds"),
+                    document_data.get("mail_analysis_id"),
+                    document_data.get("outlook_message_id"),
+                    document_data.get("attachment_id"),
+                    document_data.get("document_name"),
+                    document_data.get("file_path"),
+                    document_data.get("content_type"),
+                    document_data.get("file_size"),
+                    document_data.get("document_kind"),
+                ),
+            )
+            if cursor.rowcount:
+                return int(cursor.lastrowid)
+            row = connection.execute(
+                """
+                SELECT id
+                FROM document_analyses
+                WHERE mail_analysis_id = ?
+                  AND COALESCE(attachment_id, '') = COALESCE(?, '')
+                  AND document_name = ?
+                LIMIT 1
+                """,
+                (
+                    document_data.get("mail_analysis_id"),
+                    document_data.get("attachment_id"),
+                    document_data.get("document_name"),
+                ),
+            ).fetchone()
+            return int(row["id"]) if row else 0
+
+    def get_next_queued_document(self) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT d.*, m.subject AS mail_subject, m.sender AS mail_sender, m.received_at AS mail_received_at
+                FROM document_analyses d
+                LEFT JOIN mail_analyses m ON m.id = d.mail_analysis_id
+                WHERE status = 'queued'
+                ORDER BY d.created_at ASC, d.id ASC
+                LIMIT 1
+                """
+            ).fetchone()
+        return dict(row) if row else None
+
+    def update_document_status(self, document_id: int, status: str, details: str | None = None) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE document_analyses
+                SET status = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (status, datetime.now().isoformat(timespec="seconds"), document_id),
+            )
+        self.log_document(document_id, "INFO", f"Documentstatus bijgewerkt naar {status}", details)
+
+    def update_document_analysis_result(self, document_id: int, result: dict[str, Any]) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE document_analyses
+                SET updated_at = ?,
+                    status = ?,
+                    extracted_text = ?,
+                    document_type = ?,
+                    category = ?,
+                    summary = ?,
+                    confidence = ?,
+                    relation_proposal = ?,
+                    policy_proposal = ?,
+                    claim_proposal = ?,
+                    customer_name = ?,
+                    policy_number = ?,
+                    claim_number = ?,
+                    license_plate = ?,
+                    insurer = ?,
+                    document_date = ?,
+                    amount = ?,
+                    requires_human_review = ?,
+                    review_reason = ?,
+                    ai_model = ?,
+                    ai_raw_response = ?,
+                    ai_parse_status = ?,
+                    ai_latency_ms = ?,
+                    raw_json = ?
+                WHERE id = ?
+                """,
+                (
+                    datetime.now().isoformat(timespec="seconds"),
+                    result.get("status", "needs_human"),
+                    result.get("extracted_text"),
+                    result.get("documenttype"),
+                    result.get("categorie"),
+                    result.get("samenvatting"),
+                    result.get("vertrouwen_score"),
+                    result.get("relatievoorstel"),
+                    result.get("polisvoorstel"),
+                    result.get("schadevoorstel"),
+                    result.get("klantnaam"),
+                    result.get("polisnummer"),
+                    result.get("schadenummer"),
+                    result.get("kenteken"),
+                    result.get("maatschappij"),
+                    result.get("datum"),
+                    result.get("bedrag"),
+                    int(bool(result.get("menselijke_controle_nodig"))),
+                    result.get("reden_controle"),
+                    result.get("ai_model"),
+                    result.get("ai_raw_response"),
+                    result.get("ai_parse_status"),
+                    result.get("ai_latency_ms"),
+                    json.dumps(result, ensure_ascii=False),
+                    document_id,
+                ),
+            )
+
+    def document_analyses(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT d.*, m.subject AS mail_subject, m.sender AS mail_sender, m.received_at AS mail_received_at
+                FROM document_analyses d
+                LEFT JOIN mail_analyses m ON m.id = d.mail_analysis_id
+                ORDER BY d.id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def document_stats(self) -> dict[str, Any]:
+        with self.connect() as connection:
+            total = connection.execute("SELECT COUNT(*) FROM document_analyses").fetchone()[0]
+            queued = connection.execute(
+                "SELECT COUNT(*) FROM document_analyses WHERE status = 'queued'"
+            ).fetchone()[0]
+            needs_human = connection.execute(
+                "SELECT COUNT(*) FROM document_analyses WHERE requires_human_review = 1"
+            ).fetchone()[0]
+        return {"total": total, "queued": queued, "needs_human": needs_human}
+
+    def log_document(
+        self,
+        document_id: int | None,
+        level: str,
+        message: str,
+        details: str | None = None,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO document_logs (created_at, document_id, level, message, details)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    datetime.now().isoformat(timespec="seconds"),
+                    document_id,
+                    level,
+                    message,
+                    details,
+                ),
             )
 
     def is_duplicate_mail(self, mail_data: dict[str, Any]) -> bool:

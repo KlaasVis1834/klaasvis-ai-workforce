@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+import base64
+import json
+import re
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -10,7 +13,7 @@ from flask import Flask, flash, jsonify, redirect, render_template, request, ses
 from werkzeug.exceptions import HTTPException
 from dotenv import load_dotenv
 
-from agents import MailIntakeAgent
+from agents import DocumentAgent, MailIntakeAgent
 from database import Database
 from services import AIAnalysisWorker, MailboxMonitor, MicrosoftGraphService, OllamaService, TokenStore
 from services.microsoft_graph_service import create_pkce_pair
@@ -52,6 +55,7 @@ ollama_service = OllamaService(
     body_char_limit=OLLAMA_BODY_CHAR_LIMIT,
 )
 mail_agent = MailIntakeAgent(ollama_service, OLLAMA_MODEL)
+document_agent = DocumentAgent(ollama_service, OLLAMA_MODEL)
 token_store = TokenStore("database/microsoft_token.json")
 graph_service = MicrosoftGraphService(
     MICROSOFT_TENANT_ID,
@@ -64,6 +68,7 @@ graph_service = MicrosoftGraphService(
 
 OUTLOOK_SCOPES = ["User.Read", "Mail.Read", "offline_access"]
 MAIL_AGENT_RESET_MARKER = Path("database/mail_agent_reset_at.txt")
+DOCUMENT_STORAGE_PATH = BASE_DIR / "storage" / "documents"
 AGENT_ROUTING = {
     "INBOEDELWAARDEMETER": "Waardemeter Agent",
     "HERBOUWWAARDEMETER": "Waardemeter Agent",
@@ -80,6 +85,7 @@ AGENT_ROUTING = {
 }
 
 Path("logs").mkdir(exist_ok=True)
+DOCUMENT_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
 database.log("Applicatie", "INFO", "Applicatie gestart")
 
 
@@ -109,7 +115,6 @@ database.log("Outlook", "INFO", "Sent learning mode", startup_yes_no(ENABLE_SENT
 
 def future_agents() -> list[dict]:
     return [
-        {"naam": "Document Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
         {"naam": "Customer Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
         {"naam": "DDI Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
         {"naam": "ANVA Agent", "status": "placeholder", "omschrijving": "Nog niet functioneel."},
@@ -272,6 +277,67 @@ def filter_messages_after_reset(messages: list[dict]) -> tuple[list[dict], int]:
     return kept, skipped
 
 
+def safe_filename(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value or "document")
+    return cleaned.strip("._") or "document"
+
+
+def document_kind_from_attachment(name: str, content_type: str) -> str:
+    return document_agent.detect_document_kind(name, content_type)
+
+
+def store_outlook_attachment(mail_row: dict, attachment: dict) -> dict | None:
+    attachment_id = attachment.get("id")
+    message_id = mail_row.get("outlook_message_id") or mail_row.get("message_id")
+    if not attachment_id or not message_id:
+        return None
+    content = graph_service.fetch_attachment_content(message_id, attachment_id)
+    content_bytes = content.get("contentBytes")
+    if not content_bytes:
+        return None
+    filename = safe_filename(content.get("name") or attachment.get("name") or "attachment.bin")
+    target_dir = DOCUMENT_STORAGE_PATH / str(mail_row["id"])
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / filename
+    target_path.write_bytes(base64.b64decode(content_bytes))
+    return {
+        "mail_analysis_id": mail_row["id"],
+        "outlook_message_id": message_id,
+        "attachment_id": attachment_id,
+        "document_name": filename,
+        "file_path": str(target_path),
+        "content_type": content.get("contentType") or attachment.get("content_type"),
+        "file_size": content.get("size") or attachment.get("size") or target_path.stat().st_size,
+        "document_kind": document_kind_from_attachment(filename, content.get("contentType") or attachment.get("content_type") or ""),
+    }
+
+
+def enqueue_documents_for_mail(mail_row: dict, analysis: dict) -> int:
+    if analysis.get("volgende_agent") != "Document Agent":
+        return 0
+    try:
+        attachments = json.loads(mail_row.get("attachment_metadata") or "[]")
+    except json.JSONDecodeError:
+        attachments = []
+    if not attachments:
+        database.log("Document Agent", "INFO", "Geen bijlagen om te queueen", mail_row.get("subject"))
+        return 0
+    queued = 0
+    for attachment in attachments:
+        try:
+            document_data = store_outlook_attachment(mail_row, attachment)
+            if not document_data:
+                continue
+            document_id = database.save_document_queue_item(document_data)
+            if document_id:
+                queued += 1
+                database.log_document(document_id, "INFO", "Document in queue gezet", document_data.get("document_name"))
+                database.log("Document Agent", "INFO", "Document in queue gezet", document_data.get("document_name"))
+        except Exception as exc:
+            database.log("Document Agent", "ERROR", "Bijlage opslaan mislukt", f"{attachment.get('name')} | {exc}")
+    return queued
+
+
 @app.route("/")
 def dashboard():
     ollama_online = ollama_service.is_online()
@@ -290,7 +356,9 @@ def dashboard():
         outlook_status=graph_service.connection_status(),
         monitor_status=mailbox_monitor.snapshot(),
         ai_worker_status=ai_analysis_worker.snapshot(),
+        document_worker_status=document_analysis_worker.snapshot(),
         stats=stats,
+        document_stats=database.document_stats(),
         logs=database.latest_logs(10),
         show_hidden=show_hidden,
     )
@@ -301,7 +369,17 @@ def agents():
     return render_template(
         "agents.html",
         mail_agent=mail_agent.metadata(),
+        document_agent=document_agent.metadata(),
         future_agents=future_agents(),
+    )
+
+
+@app.route("/documents")
+def documents():
+    return render_template(
+        "documents.html",
+        documents=database.document_analyses(100),
+        document_stats=database.document_stats(),
     )
 
 
@@ -705,6 +783,9 @@ def process_one_queued_mail() -> dict[str, int]:
             return {"processed": 1, "timeouts": 1, "hidden": 0}
 
     database.update_mail_analysis_result(mail_row["id"], analysis)
+    queued_documents = enqueue_documents_for_mail(mail_row, analysis)
+    if queued_documents:
+        database.log("Document Agent", "INFO", "Bijlagen doorgestuurd naar Document Agent", str(queued_documents))
     database.log(
         "Mail Intake Agent",
         "INFO",
@@ -716,6 +797,29 @@ def process_one_queued_mail() -> dict[str, int]:
         ),
     )
     return {"processed": 1, "timeouts": 0, "hidden": 0}
+
+
+def process_one_queued_document() -> dict[str, int]:
+    document_row = database.get_next_queued_document()
+    if not document_row:
+        return {"processed": 0, "failed": 0}
+    database.update_document_status(document_row["id"], "analyzing", document_row.get("document_name"))
+    database.log("Document Agent", "INFO", "Documentanalyse gestart", document_row.get("document_name"))
+    result = document_agent.run(document_row)
+    database.update_document_analysis_result(document_row["id"], result)
+    database.log_document(
+        document_row["id"],
+        "INFO" if result.get("status") != "needs_human" else "WARNING",
+        "Documentanalyse opgeslagen",
+        f"{result.get('categorie')} | {result.get('documenttype')}",
+    )
+    database.log(
+        "Document Agent",
+        "INFO",
+        "Documentanalyse opgeslagen",
+        f"{document_row.get('document_name')} | {result.get('categorie')} | {result.get('status')}",
+    )
+    return {"processed": 1, "failed": 0}
 
 
 def import_outlook_messages(mode: str = "poll") -> dict[str, int]:
@@ -804,8 +908,17 @@ ai_analysis_worker = AIAnalysisWorker(
     process_callback=process_one_queued_mail,
     log_callback=database.log,
     interval_seconds=OLLAMA_ANALYSIS_INTERVAL_SECONDS,
+    agent_name="Mail Intake Agent",
 )
 ai_analysis_worker.start()
+
+document_analysis_worker = AIAnalysisWorker(
+    process_callback=process_one_queued_document,
+    log_callback=database.log,
+    interval_seconds=OLLAMA_ANALYSIS_INTERVAL_SECONDS,
+    agent_name="Document Agent",
+)
+document_analysis_worker.start()
 
 
 @app.route("/api/status")
@@ -822,6 +935,8 @@ def api_status():
             },
             "monitor": mailbox_monitor.snapshot(),
             "ai_worker": ai_analysis_worker.snapshot(),
+            "document_worker": document_analysis_worker.snapshot(),
+            "document_stats": database.document_stats(),
             "stats": database.dashboard_stats(),
         }
     )

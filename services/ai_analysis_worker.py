@@ -11,10 +11,12 @@ class AIAnalysisWorker:
         process_callback: Callable[[], dict[str, int]],
         log_callback: Callable[[str, str, str, str | None], None],
         interval_seconds: int = 10,
+        agent_name: str = "Mail Intake Agent",
     ) -> None:
         self.process_callback = process_callback
         self.log_callback = log_callback
         self.interval_seconds = interval_seconds
+        self.agent_name = agent_name
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
@@ -29,9 +31,10 @@ class AIAnalysisWorker:
         if self._thread and self._thread.is_alive():
             return
         self.status["running"] = True
-        self._thread = threading.Thread(target=self._run, name="ai-analysis-worker", daemon=True)
+        thread_name = f"{self.agent_name.lower().replace(' ', '-')}-worker"
+        self._thread = threading.Thread(target=self._run, name=thread_name, daemon=True)
         self._thread.start()
-        self.log_callback("Mail Intake Agent", "INFO", "AI analyse worker gestart", None)
+        self.log_callback(self.agent_name, "INFO", "AI analyse worker gestart", None)
 
     def snapshot(self) -> dict:
         return dict(self.status)
@@ -50,7 +53,7 @@ class AIAnalysisWorker:
                 self.run_once()
             except Exception as exc:
                 self.status["last_error"] = str(exc)
-                self.log_callback("Mail Intake Agent", "ERROR", "AI analyse worker mislukt", str(exc))
+                self.log_callback(self.agent_name, "ERROR", "AI analyse worker mislukt", str(exc))
             self._stop_event.wait(self.interval_seconds)
 
     def _now(self) -> str:

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Documenten - Klaas Vis AI Workforce{% endblock %}
+{% block content %}
+<section class="hero-bar">
+    <div>
+        <p class="eyebrow">Document Agent</p>
+        <h1>Documenten</h1>
+    </div>
+    <div class="hero-actions">
+        <span class="status-chip online"><i class="ti ti-files"></i>{{ document_stats.total }} documenten</span>
+        <span class="status-chip {{ 'online' if document_stats.queued == 0 else 'offline' }}">
+            <i class="ti ti-hourglass"></i>{{ document_stats.queued }} in queue
+        </span>
+    </div>
+</section>
+
+<section class="panel">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">DDI-indexvoorstel</p>
+            <h2>Documentanalyses</h2>
+        </div>
+    </div>
+
+    {% if documents %}
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Tijd</th>
+                        <th>Documentnaam</th>
+                        <th>Gekoppelde mail</th>
+                        <th>Documenttype</th>
+                        <th>Relatie</th>
+                        <th>Polis</th>
+                        <th>Schade</th>
+                        <th>Vertrouwen</th>
+                        <th>Status</th>
+                        <th>Controle</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in documents %}
+                        <tr>
+                            <td class="mono">{{ item.created_at }}</td>
+                            <td>{{ item.document_name or "-" }}</td>
+                            <td>{{ item.mail_subject or "-" }}</td>
+                            <td><span class="pill amber">{{ item.document_type or item.category or "onbekend" }}</span></td>
+                            <td>{{ item.relation_proposal or item.customer_name or "-" }}</td>
+                            <td>{{ item.policy_proposal or item.policy_number or "-" }}</td>
+                            <td>{{ item.claim_proposal or item.claim_number or "-" }}</td>
+                            <td>{{ "%.0f"|format((item.confidence or 0) * 100) }}%</td>
+                            <td><span class="pill cyan">{{ item.status or "queued" }}</span></td>
+                            <td>{{ "Ja" if item.requires_human_review else "Nee" }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <p class="empty">Nog geen documenten in de Document Agent queue.</p>
+    {% endif %}
+</section>
+{% endblock %}

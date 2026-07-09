@@ -40,6 +40,11 @@
         <strong>{{ stats.error_count }}</strong>
         <small>gelogde foutmeldingen</small>
     </article>
+    <article class="stat-card accent-cyan">
+        <div><span>Documenten</span><i class="ti ti-files"></i></div>
+        <strong>{{ document_stats.total }}</strong>
+        <small>{{ document_stats.queued }} wacht op analyse</small>
+    </article>
 </section>
 
 <section class="dashboard-grid">
@@ -109,6 +114,7 @@
             <div><span class="dot ok"></span><strong>Mail Intake Agent</strong><small>actief</small></div>
             <div><span class="dot cyan"></span><strong>Mailbox Monitor</strong><small>{{ "online" if monitor_status.running else "offline" }}</small></div>
             <div><span class="dot cyan"></span><strong>Ollama Worker</strong><small>{{ "online" if ai_worker_status.running else "offline" }}</small></div>
+            <div><span class="dot cyan"></span><strong>Document Agent</strong><small>{{ "online" if document_worker_status.running else "offline" }}</small></div>
             <div><span class="dot amber"></span><strong>Outlook</strong><small>{{ outlook_status.status }}</small></div>
         </div>
     </article>

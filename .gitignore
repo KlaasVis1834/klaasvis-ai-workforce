@@ -6,3 +6,4 @@ database/*.json
 database/*.txt
 logs/*.log
 .env
+storage/
