@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 from agents import DocumentAgent, MailIntakeAgent, WaardemeterAgent
 from database import Database
-from services import AIAnalysisWorker, MailboxMonitor, MicrosoftGraphService, OllamaService, TokenStore
+from services import AIAnalysisWorker, MailboxMonitor, MicrosoftGraphService, NH1816PortalService, OllamaService, TokenStore
 from services.microsoft_graph_service import create_pkce_pair
 
 
@@ -46,6 +46,7 @@ ALLOWED_OUTLOOK_EMAIL = os.getenv("ALLOWED_OUTLOOK_EMAIL", "").strip().lower()
 NH1816_USERNAME = os.getenv("NH1816_USERNAME", "").strip()
 NH1816_PASSWORD = os.getenv("NH1816_PASSWORD", "").strip()
 NH1816_VALUE_METERS_URL = os.getenv("NH1816_VALUE_METERS_URL", "").strip()
+NH1816_HEADLESS = os.getenv("NH1816_HEADLESS", "true").strip().lower() == "true"
 
 app = Flask(__name__)
 app.secret_key = APP_SECRET_KEY
@@ -73,6 +74,13 @@ graph_service = MicrosoftGraphService(
     MICROSOFT_REDIRECT_URI,
     token_store,
     ALLOWED_OUTLOOK_EMAIL,
+)
+nh1816_service = NH1816PortalService(
+    NH1816_USERNAME,
+    NH1816_PASSWORD,
+    NH1816_VALUE_METERS_URL,
+    headless=NH1816_HEADLESS,
+    debug_dir=BASE_DIR / "storage" / "debug",
 )
 
 OUTLOOK_SCOPES = ["User.Read", "Mail.Read", "offline_access"]
@@ -126,7 +134,8 @@ database.log(
     "NH1816 config loaded",
     (
         f"credentials={startup_yes_no(bool(NH1816_USERNAME and NH1816_PASSWORD))} "
-        f"value_meters_url={startup_yes_no(bool(NH1816_VALUE_METERS_URL))}"
+        f"value_meters_url={startup_yes_no(bool(NH1816_VALUE_METERS_URL))} "
+        f"headless={startup_yes_no(NH1816_HEADLESS)}"
     ),
 )
 
@@ -371,6 +380,7 @@ def nh1816_config_status() -> dict[str, Any]:
         "password_present": bool(NH1816_PASSWORD),
         "value_meters_url_present": bool(NH1816_VALUE_METERS_URL),
         "value_meters_url": NH1816_VALUE_METERS_URL,
+        "headless": NH1816_HEADLESS,
         "automatic_portal_processing": False,
     }
 
@@ -505,6 +515,27 @@ def import_waardemeter_items(items: list[dict[str, Any]]) -> dict[str, int]:
     return {"imported": imported, "duplicates": duplicates, "failed": failed}
 
 
+def import_nh1816_fetch_items(items: list[dict[str, Any]], fetched_at: str) -> dict[str, int]:
+    prepared = []
+    for item in items:
+        mapped = map_waardemeter_row(
+            {
+                "klantnaam": item.get("klantnaam") or item.get("customer_name") or "",
+                "polisnummer": item.get("polisnummer") or item.get("policy_number") or "",
+                "soort": item.get("meter_type") or "",
+                "datum verzoek": item.get("request_date") or "",
+                "status": item.get("status") or item.get("portal_status") or "",
+            },
+            "NH1816 portal",
+        )
+        mapped["raw_text"] = item.get("raw_text") or ""
+        mapped["raw_json"] = item.get("raw_json") or item
+        mapped["fetched_at"] = fetched_at
+        mapped["action_button_present"] = bool(item.get("action_button_present"))
+        prepared.append(mapped)
+    return import_waardemeter_items(prepared)
+
+
 @app.route("/")
 def dashboard():
     ollama_online = ollama_service.is_online()
@@ -560,6 +591,33 @@ def waardemeters():
         stats=database.waardemeter_stats(),
         nh1816_config=nh1816_config_status(),
     )
+
+
+@app.route("/waardemeters/fetch-nh1816", methods=["POST"])
+def waardemeters_fetch_nh1816():
+    if not nh1816_service.configured:
+        database.log("Waardemeter Agent", "ERROR", "NH1816 fetch niet gestart: configuratie ontbreekt")
+        flash("NH1816 ophalen kan niet starten: vul NH1816_USERNAME, NH1816_PASSWORD en NH1816_VALUE_METERS_URL in .env.", "error")
+        return redirect(url_for("waardemeters"))
+    try:
+        database.log("Waardemeter Agent", "INFO", "NH1816 fetch gestart", "value_meters_url=aanwezig")
+        fetch_result = nh1816_service.fetch_value_meters()
+        database.log("Waardemeter Agent", "INFO", "NH1816 kolommen gevonden", ", ".join(fetch_result.columns) or "geen tabelkolommen gevonden")
+        result = import_nh1816_fetch_items(fetch_result.items, fetch_result.fetched_at)
+        database.log(
+            "Waardemeter Agent",
+            "INFO",
+            "NH1816 fetch voltooid",
+            f"gevonden={len(fetch_result.items)}; geimporteerd={result['imported']}; duplicaten={result['duplicates']}; fouten={result['failed']}",
+        )
+        flash(
+            f"NH1816 ophalen voltooid: {len(fetch_result.items)} gevonden, {result['imported']} nieuw, {result['duplicates']} duplicaten.",
+            "success" if result["failed"] == 0 else "error",
+        )
+    except Exception as exc:
+        database.log("Waardemeter Agent", "ERROR", "NH1816 fetch mislukt", str(exc))
+        flash(f"NH1816 ophalen mislukt: {exc}", "error")
+    return redirect(url_for("waardemeters"))
 
 
 @app.route("/waardemeters/import", methods=["GET", "POST"])

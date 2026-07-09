@@ -24,6 +24,12 @@ Installeer dependencies:
 pip install -r requirements.txt
 ```
 
+Installeer Playwright Chromium voor de NH1816-portaalservice:
+
+```powershell
+python -m playwright install chromium
+```
+
 Maak een `.env` aan op basis van `.env.example`:
 
 ```env
@@ -36,6 +42,10 @@ MICROSOFT_CLIENT_ID=
 MICROSOFT_CLIENT_SECRET=
 MICROSOFT_REDIRECT_URI=http://localhost:5000/outlook/callback
 ALLOWED_OUTLOOK_EMAIL=<toegestaan-outlook-account>
+NH1816_USERNAME=
+NH1816_PASSWORD=
+NH1816_VALUE_METERS_URL=https://report.portal.nh1816.nl/value-meters
+NH1816_HEADLESS=false
 ```
 
 ## Ollama

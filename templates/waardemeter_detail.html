@@ -27,6 +27,7 @@
             <div><dt>Maatschappij</dt><dd>{{ item.insurer or "NH1816" }}</dd></div>
             <div><dt>Datum verzoek</dt><dd>{{ item.request_date or "-" }}</dd></div>
             <div><dt>Status portaal</dt><dd>{{ item.portal_status or "-" }}</dd></div>
+            <div><dt>Laatste fetch</dt><dd>{{ item.fetched_at or "-" }}</dd></div>
         </dl>
     </article>
 
@@ -84,5 +85,15 @@
         <div><dt>Taak</dt><dd>{{ item.agenda_task or "-" }}</dd></div>
         <div><dt>Rappeldatum</dt><dd>{{ item.agenda_due_date or "-" }}</dd></div>
     </dl>
+</section>
+
+<section class="panel">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">NH1816 raw data</p>
+            <h2>Uitgelezen rij</h2>
+        </div>
+    </div>
+    <pre class="json-output">{{ item.raw_text or item.raw_json or "-" }}</pre>
 </section>
 {% endblock %}

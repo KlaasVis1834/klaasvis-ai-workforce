@@ -7,9 +7,12 @@
         <h1>Waardemeters</h1>
     </div>
     <div class="hero-actions">
+        <form method="post" action="{{ url_for('waardemeters_fetch_nh1816') }}">
+            <button type="submit"><i class="ti ti-cloud-download"></i>NH1816 ophalen</button>
+        </form>
         <a class="button" href="{{ url_for('waardemeters_import') }}"><i class="ti ti-upload"></i>Importeren</a>
         <span class="status-chip {{ 'online' if nh1816_config.value_meters_url_present else 'offline' }}">
-            <i class="ti ti-shield-lock"></i>NH1816 portaal handmatig
+            <i class="ti ti-shield-lock"></i>NH1816 uitlezen
         </span>
     </div>
 </section>
@@ -35,6 +38,11 @@
         <strong>{{ stats.manual_nh1816 }}</strong>
         <small>handmatige portaalactie vereist</small>
     </article>
+    <article class="stat-card accent-cyan">
+        <div><span>Laatste fetch</span><i class="ti ti-clock"></i></div>
+        <strong>{{ stats.fetched_total }}</strong>
+        <small>{{ stats.last_fetch or "nog niet opgehaald" }}</small>
+    </article>
 </section>
 
 <section class="panel">
@@ -56,7 +64,9 @@
                         <th>Polisnummer</th>
                         <th>Soort meter</th>
                         <th>Datum verzoek</th>
+                        <th>Laatste fetch</th>
                         <th>Voorgestelde actie</th>
+                        <th>Raw data</th>
                         <th>Acties</th>
                     </tr>
                 </thead>
@@ -68,7 +78,9 @@
                             <td>{{ item.policy_number or "-" }}</td>
                             <td><span class="pill amber">{{ item.meter_type or "onbekend" }}</span></td>
                             <td class="mono">{{ item.request_date or "-" }}</td>
+                            <td class="mono">{{ item.fetched_at or "-" }}</td>
                             <td>{{ item.proposed_action or "-" }}</td>
+                            <td>{{ item.raw_text[:180] if item.raw_text else "-" }}</td>
                             <td>
                                 <div class="button-row">
                                     <a class="button ghost" href="{{ url_for('waardemeter_detail', waardemeter_id=item.id) }}#conceptmail">
@@ -113,8 +125,9 @@
         <div><dt>URL aanwezig</dt><dd>{{ "Ja" if nh1816_config.value_meters_url_present else "Nee" }}</dd></div>
         <div><dt>Gebruikersnaam aanwezig</dt><dd>{{ "Ja" if nh1816_config.username_present else "Nee" }}</dd></div>
         <div><dt>Wachtwoord aanwezig</dt><dd>{{ "Ja" if nh1816_config.password_present else "Nee" }}</dd></div>
+        <div><dt>Browser zichtbaar</dt><dd>{{ "Nee" if nh1816_config.headless else "Ja" }}</dd></div>
         <div><dt>Automatisch afvinken</dt><dd>Uit</dd></div>
-        <div><dt>Veilige route nu</dt><dd>CSV, Excel of plak-import vanaf NH1816-export</dd></div>
+        <div><dt>Veilige route nu</dt><dd>NH1816 ophalen/uitlezen plus CSV, Excel of plak-import</dd></div>
     </dl>
 </section>
 {% endblock %}

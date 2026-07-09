@@ -30,7 +30,7 @@ class WaardemeterAgent(BaseAgent):
         item["anva_memo"] = self.anva_memo(item)
         item["agenda_task"] = "Controle retour waardemeter NH1816"
         item["agenda_due_date"] = self.due_date()
-        item["status"] = "wacht_op_akkoord"
+        item["status"] = "concepten_klaar"
         self.status = "beschikbaar"
         self.touch()
         return item
@@ -42,6 +42,7 @@ class WaardemeterAgent(BaseAgent):
             or input_data.get("soort")
             or input_data.get("type")
             or input_data.get("waardemeter")
+            or input_data.get("raw_text")
             or ""
         )
         return {
@@ -73,6 +74,10 @@ class WaardemeterAgent(BaseAgent):
                 or input_data.get("nh1816 status")
                 or ""
             ),
+            "raw_text": self.clean_text(input_data.get("raw_text") or ""),
+            "raw_json": input_data.get("raw_json") or {},
+            "fetched_at": input_data.get("fetched_at"),
+            "action_button_present": bool(input_data.get("action_button_present")),
         }
 
     def normalize_meter_type(self, value: str) -> str:
