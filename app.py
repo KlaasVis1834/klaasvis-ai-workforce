@@ -373,7 +373,14 @@ WAARDEMETER_HEADER_ALIASES = {
     "branche": {"branche", "branch", "verzekering", "product"},
     "meter_type": {"soort", "type", "soortwaardemeter", "soort_waardemeter", "waardemeter", "meter"},
     "request_date": {"datum", "datumverzoek", "datum_verzoek", "verzoekdatum", "aanvraagdatum"},
-    "expiry_date": {"verloopdatuminboedel", "verlengdatumopstal", "verloopdatum", "verlengdatum", "einddatum"},
+    "expiry_date": {
+        "verloopdatuminboedelverlengdatumopstal",
+        "verloopdatuminboedel",
+        "verlengdatumopstal",
+        "verloopdatum",
+        "verlengdatum",
+        "einddatum",
+    },
     "handled_date": {"behandeld", "behandelddatum", "datumbehandeld"},
     "portal_status": {"status", "nh1816status", "portalstatus", "portal_status"},
 }

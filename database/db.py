@@ -809,6 +809,98 @@ class Database:
         now = datetime.now().isoformat(timespec="seconds")
         imported = False
         with self.connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT id, task_id
+                FROM waardemeter_items
+                WHERE source_hash = ?
+                LIMIT 1
+                """,
+                (source_hash,),
+            ).fetchone()
+            if existing:
+                waardemeter_id = int(existing["id"])
+                connection.execute(
+                    """
+                    UPDATE waardemeter_items
+                    SET source = ?,
+                        klantnaam = ?,
+                        adres = ?,
+                        email = ?,
+                        polisnummer = ?,
+                        branche = ?,
+                        meter_type = ?,
+                        request_date = ?,
+                        expiry_date = ?,
+                        handled_date = ?,
+                        status = ?,
+                        row_state = ?,
+                        raw_text = ?,
+                        raw_json = ?,
+                        fetched_at = ?,
+                        processing_status = ?,
+                        proposed_action = ?,
+                        concept_email_subject = ?,
+                        concept_email_body = ?,
+                        anva_memo = ?,
+                        agenda_task = ?,
+                        agenda_due_date = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        item.get("source", "Import"),
+                        item.get("customer_name") or item.get("klantnaam"),
+                        item.get("address") or item.get("adres"),
+                        item.get("email"),
+                        item.get("policy_number") or item.get("polisnummer"),
+                        item.get("branche"),
+                        item.get("meter_type"),
+                        item.get("request_date"),
+                        item.get("expiry_date"),
+                        item.get("handled_date"),
+                        item.get("portal_status") or item.get("status"),
+                        item.get("row_state"),
+                        item.get("raw_text"),
+                        json.dumps(item.get("raw_json") or {}, ensure_ascii=False),
+                        item.get("fetched_at"),
+                        item.get("processing_status", item.get("status", "nieuw_verzoek")),
+                        item.get("proposed_action"),
+                        item.get("concept_email_subject"),
+                        item.get("concept_email_body"),
+                        item.get("anva_memo"),
+                        item.get("agenda_task"),
+                        item.get("agenda_due_date"),
+                        now,
+                        waardemeter_id,
+                    ),
+                )
+                if item.get("task_type") == "WAARDEMETER_REQUEST" and not existing["task_id"]:
+                    task_cursor = connection.execute(
+                        """
+                        INSERT INTO ai_tasks (
+                            created_at, updated_at, task_type, source_agent, target_agent,
+                            payload, status, source_record_type, source_record_id
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            now,
+                            now,
+                            "WAARDEMETER_REQUEST",
+                            "Waardemeter Agent",
+                            "Communicatie Agent, ANVA Agent",
+                            json.dumps(item.get("task_payload") or {}, ensure_ascii=False),
+                            "waiting_for_next_agent",
+                            "waardemeter_items",
+                            waardemeter_id,
+                        ),
+                    )
+                    connection.execute(
+                        "UPDATE waardemeter_items SET task_id = ? WHERE id = ?",
+                        (int(task_cursor.lastrowid), waardemeter_id),
+                    )
+                return waardemeter_id
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO waardemeter_items (

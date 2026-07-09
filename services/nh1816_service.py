@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import json
 import re
 from typing import Any
 
@@ -41,12 +42,11 @@ class NH1816PortalService:
             raise RuntimeError("NH1816 configuratie ontbreekt. Vul URL, gebruikersnaam en wachtwoord in .env.")
 
         try:
-            from bs4 import BeautifulSoup
             from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
             raise RuntimeError(
-                "Playwright/BeautifulSoup ontbreekt. Installeer dependencies en voer uit: "
+                "Playwright ontbreekt. Installeer dependencies en voer uit: "
                 "python -m playwright install chromium"
             ) from exc
 
@@ -66,11 +66,6 @@ class NH1816PortalService:
                 screenshot_path = self.debug_dir / "nh1816_value_meters.png"
                 page.screenshot(path=str(screenshot_path), full_page=True)
                 items, columns = self._extract_visible_table_rows(page)
-                soup = BeautifulSoup(html, "html.parser")
-                if not items:
-                    items, columns = self._extract_items(soup)
-                if not items:
-                    items = self._extract_raw_rows(soup)
                 return NH1816FetchResult(
                     items=items,
                     columns=columns,
@@ -89,6 +84,14 @@ class NH1816PortalService:
                     html_snapshot_path.write_text(page.content(), encoding="utf-8")
                 except Exception:
                     html_snapshot_path = None
+                try:
+                    selectors_path = self.debug_dir / "nh1816_selectors.json"
+                    selectors_path.write_text(
+                        json.dumps(self._selector_debug(page), ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                except Exception:
+                    pass
                 raise RuntimeError(
                     "NH1816 ophalen mislukt. Debugbestanden zijn opgeslagen in storage/debug."
                 ) from exc
@@ -157,10 +160,22 @@ class NH1816PortalService:
         return None
 
     def _wait_for_value_meter_rows(self, page: Any, timeout_error: type[Exception]) -> None:
-        try:
-            page.wait_for_selector("table tr, [role='row']", timeout=30000)
-        except timeout_error:
-            page.wait_for_load_state("domcontentloaded", timeout=10000)
+        selectors = [
+            "table:visible tbody tr:visible",
+            "table:visible tr:visible",
+            "[role='grid']:visible [role='row']:visible",
+            "[role='table']:visible [role='row']:visible",
+        ]
+        last_error: Exception | None = None
+        for selector in selectors:
+            try:
+                page.wait_for_selector(selector, timeout=15000)
+                return
+            except timeout_error as exc:
+                last_error = exc
+                continue
+        page.wait_for_load_state("domcontentloaded", timeout=10000)
+        raise RuntimeError(f"NH1816 waardemetertabel niet gevonden. Selectors geprobeerd: {', '.join(selectors)}") from last_error
 
     def _extract_visible_table_rows(self, page: Any) -> tuple[list[dict[str, Any]], list[str]]:
         table_payload = page.evaluate(
@@ -171,53 +186,84 @@ class NH1816PortalService:
                     const style = window.getComputedStyle(el);
                     return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
                 };
+                const text = (el) => (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ');
                 const rowMeta = (row) => {
                     const style = window.getComputedStyle(row);
+                    const cells = Array.from(row.querySelectorAll('td, [role="cell"], [role="gridcell"]')).filter(visible);
                     return {
                         className: typeof row.className === 'string' ? row.className : '',
                         style: row.getAttribute('style') || '',
                         dataStatus: row.getAttribute('data-status') || '',
                         backgroundColor: style.backgroundColor || '',
-                        color: style.color || ''
+                        color: style.color || '',
+                        cellClassNames: cells.map((cell) => typeof cell.className === 'string' ? cell.className : ''),
+                        cellBackgroundColors: cells.map((cell) => window.getComputedStyle(cell).backgroundColor || ''),
+                        cellStyles: cells.map((cell) => cell.getAttribute('style') || '')
                     };
                 };
-                const tables = Array.from(document.querySelectorAll('table')).filter(visible);
-                for (const table of tables) {
-                    const headerCells = Array.from(table.querySelectorAll('thead th')).filter(visible);
-                    let headers = headerCells.map((cell) => cell.innerText.trim());
+                const tableScore = (headers) => {
+                    const haystack = headers.join(' ').toLowerCase();
+                    const needles = ['relatie', 'adres', 'email', 'branche', 'polis', 'behandeld'];
+                    return needles.filter((needle) => haystack.includes(needle)).length;
+                };
+                const tables = Array.from(document.querySelectorAll('table')).filter(visible).map((table) => {
+                    let headers = Array.from(table.querySelectorAll('thead th, thead td')).filter(visible).map(text);
                     if (!headers.length) {
-                        const first = Array.from(table.querySelectorAll('tr')).find((row) => visible(row));
-                        if (first) {
-                            headers = Array.from(first.querySelectorAll('th')).filter(visible).map((cell) => cell.innerText.trim());
-                        }
+                        const first = Array.from(table.querySelectorAll('tr')).find((row) => visible(row) && row.querySelectorAll('th').length);
+                        if (first) headers = Array.from(first.querySelectorAll('th')).filter(visible).map(text);
                     }
+                    return { table, headers, score: tableScore(headers) };
+                }).sort((a, b) => b.score - a.score);
+                for (const table of tables) {
+                    if (table.score < 4) continue;
                     const rows = [];
-                    for (const row of Array.from(table.querySelectorAll('tbody tr, tr')).filter(visible)) {
+                    for (const row of Array.from(table.table.querySelectorAll('tbody tr, tr')).filter(visible)) {
                         const cells = Array.from(row.querySelectorAll('td')).filter(visible);
                         if (!cells.length) continue;
-                        const values = cells.map((cell) => cell.innerText.trim());
-                        if (!values.some(Boolean)) continue;
-                        rows.push({ values, rawText: values.filter(Boolean).join(' | '), meta: rowMeta(row) });
+                        const values = cells.map(text);
+                        if (!values.some((value) => value.length)) continue;
+                        rows.push({ values, rawText: values.join(' | '), meta: rowMeta(row) });
                     }
-                    if (rows.length) return { headers, rows };
+                    if (rows.length) return { type: 'table', headers: table.headers, rows };
                 }
-                const roleRows = Array.from(document.querySelectorAll('[role="row"]')).filter(visible);
-                const rows = [];
-                for (const row of roleRows) {
-                    const cells = Array.from(row.querySelectorAll('[role="cell"], [role="gridcell"], [role="columnheader"]')).filter(visible);
-                    const values = cells.length ? cells.map((cell) => cell.innerText.trim()) : [row.innerText.trim()];
-                    if (!values.some(Boolean)) continue;
-                    rows.push({ values, rawText: values.filter(Boolean).join(' | '), meta: rowMeta(row) });
+                const grids = Array.from(document.querySelectorAll('[role="grid"], [role="table"]')).filter(visible);
+                for (const grid of grids) {
+                    const headerRow = Array.from(grid.querySelectorAll('[role="row"]')).find((row) => {
+                        return visible(row) && row.querySelectorAll('[role="columnheader"]').length;
+                    });
+                    const headers = headerRow
+                        ? Array.from(headerRow.querySelectorAll('[role="columnheader"]')).filter(visible).map(text)
+                        : [];
+                    if (tableScore(headers) < 4) continue;
+                    const rows = [];
+                    for (const row of Array.from(grid.querySelectorAll('[role="row"]')).filter(visible)) {
+                        const cells = Array.from(row.querySelectorAll('[role="cell"], [role="gridcell"]')).filter(visible);
+                        if (!cells.length) continue;
+                        const values = cells.map(text);
+                        if (!values.some((value) => value.length)) continue;
+                        rows.push({ values, rawText: values.join(' | '), meta: rowMeta(row) });
+                    }
+                    if (rows.length) return { type: 'role-grid', headers, rows };
                 }
-                return { headers: [], rows };
+                return { type: 'none', headers: [], rows: [], selectors: {
+                    tables: document.querySelectorAll('table').length,
+                    visibleTables: Array.from(document.querySelectorAll('table')).filter(visible).length,
+                    trs: document.querySelectorAll('tr').length,
+                    visibleTrs: Array.from(document.querySelectorAll('tr')).filter(visible).length,
+                    roleRows: document.querySelectorAll('[role="row"]').length,
+                    visibleRoleRows: Array.from(document.querySelectorAll('[role="row"]')).filter(visible).length
+                }};
             }
             """
         )
         headers = [str(value or "").strip() for value in table_payload.get("headers", [])]
+        if not headers:
+            self._write_selector_debug(page, table_payload)
+            raise RuntimeError("NH1816 tabel gevonden, maar geen kolomkoppen uit de DOM gelezen.")
         items = []
         for row in table_payload.get("rows", []):
             values = [str(value or "").strip() for value in row.get("values", [])]
-            raw_text = str(row.get("rawText") or " | ".join(value for value in values if value))
+            raw_text = str(row.get("rawText") or " | ".join(values))
             meta = row.get("meta") or {}
             mapped = self._map_row(headers, values, raw_text)
             row_state = self._row_state_from_marker(
@@ -227,6 +273,9 @@ class NH1816PortalService:
                         str(meta.get("style") or ""),
                         str(meta.get("dataStatus") or ""),
                         str(meta.get("backgroundColor") or ""),
+                        " ".join(str(value or "") for value in meta.get("cellClassNames") or []),
+                        " ".join(str(value or "") for value in meta.get("cellBackgroundColors") or []),
+                        " ".join(str(value or "") for value in meta.get("cellStyles") or []),
                         raw_text,
                     ]
                 )
@@ -237,79 +286,39 @@ class NH1816PortalService:
             mapped["status"] = self._portal_status(row_state)
             mapped["row_class"] = meta.get("className")
             mapped["row_background_color"] = meta.get("backgroundColor")
-            mapped["raw_json"] = {**(mapped.get("raw_json") or {}), "_row_meta": meta}
+            mapped["raw_json"] = {**(mapped.get("raw_json") or {}), "_row_meta": meta, "_cells": values}
             mapped["action_button_present"] = False
+            self._validate_dom_row(mapped)
             items.append(mapped)
+        if not items:
+            self._write_selector_debug(page, table_payload)
+            raise RuntimeError("NH1816 tabel gevonden, maar er zijn geen zichtbare datarijen gelezen.")
         return items, headers
 
-    def _extract_items(self, soup: Any) -> tuple[list[dict[str, Any]], list[str]]:
-        table = soup.find("table")
-        if not table:
-            return [], []
-        headers = [cell.get_text(" ", strip=True) for cell in table.select("thead th")]
-        if not headers:
-            first_row = table.find("tr")
-            headers = [cell.get_text(" ", strip=True) for cell in first_row.find_all(["th", "td"])] if first_row else []
-        rows = []
-        for row in table.find_all("tr"):
-            cells = row.find_all("td")
-            if not cells:
-                continue
-            values = [cell.get_text(" ", strip=True) for cell in cells]
-            raw_text = " | ".join(value for value in values if value)
-            mapped = self._map_row(headers, values, raw_text)
-            mapped["action_button_present"] = bool(row.find(["button", "a", "input"]))
-            row_state = self._row_state(row)
-            mapped["row_state"] = self._status_state(mapped.get("status", "")) if row_state == "unknown" else row_state
-            mapped["status"] = self._portal_status(mapped["row_state"])
-            rows.append(mapped)
-        return rows, headers
-
-    def _extract_raw_rows(self, soup: Any) -> list[dict[str, Any]]:
-        rows = []
-        selectors = ["[role='row']", ".row", "li", "article"]
-        for selector in selectors:
-            for element in soup.select(selector):
-                text = element.get_text(" ", strip=True)
-                if self._looks_like_value_meter(text):
-                    rows.append(
-                        {
-                            "raw_text": text,
-                            "status": "openstaand",
-                            "row_state": self._row_state(element),
-                            "action_button_present": bool(element.find(["button", "a", "input"])),
-                        }
-                    )
-            if rows:
-                return rows
-        body_text = soup.get_text(" ", strip=True)
-        if body_text:
-            return [{"raw_text": body_text[:4000], "status": "parsing_onzeker", "row_state": "unknown", "action_button_present": False}]
-        return []
-
     def _map_row(self, headers: list[str], values: list[str], raw_text: str) -> dict[str, Any]:
-        if not headers:
-            headers = [
-                "Relatie",
-                "Adres",
-                "Emailadres",
-                "Branche",
-                "Polisnr.",
-                "Verloopdatum Inboedel / Verlengdatum Opstal",
-                "Behandeld",
-            ]
         row = {headers[index] if index < len(headers) else f"kolom_{index + 1}": value for index, value in enumerate(values)}
         normalized = {self._normalize_header(key): value for key, value in row.items()}
+        branche = self._first_value(normalized, ["branche", "branch", "verzekering", "product"])
+        meter_type = self._meter_type_from_branche(
+            self._first_value(normalized, ["soort", "type", "waardemeter", "meter", "soortwaardemeter"]) or branche
+        )
         return {
             "klantnaam": self._first_value(normalized, ["klantnaam", "klant", "relatie", "verzekeringnemer", "naam"]),
             "adres": self._first_value(normalized, ["adres", "straat", "woonadres", "risicoadres"]),
             "email": self._first_value(normalized, ["email", "emailadres", "e-mail", "mail"]),
             "polisnummer": self._first_value(normalized, ["polisnummer", "polisnr", "polis", "polnr", "policynumber"]),
-            "branche": self._first_value(normalized, ["branche", "branch", "verzekering", "product"]),
-            "meter_type": self._first_value(normalized, ["soort", "type", "waardemeter", "meter", "soortwaardemeter", "branche"]),
+            "branche": branche,
+            "meter_type": meter_type,
             "expiry_date": self._first_value(
                 normalized,
-                ["verloopdatuminboedel", "verlengdatumopstal", "verloopdatum", "verlengdatum", "einddatum"],
+                [
+                    "verloopdatuminboedelverlengdatumopstal",
+                    "verloopdatuminboedel",
+                    "verlengdatumopstal",
+                    "verloopdatum",
+                    "verlengdatum",
+                    "einddatum",
+                ],
             ),
             "handled_date": self._first_value(normalized, ["behandeld", "behandelddatum", "datumbehandeld"]),
             "request_date": self._first_value(normalized, ["datumverzoek", "verzoekdatum", "datum", "aanvraagdatum"]),
@@ -327,20 +336,13 @@ class NH1816PortalService:
     def _normalize_header(self, value: str) -> str:
         return "".join(character for character in value.lower() if character.isalnum())
 
-    def _looks_like_value_meter(self, text: str) -> bool:
-        lowered = text.lower()
-        return "waardemeter" in lowered or "inboedel" in lowered or "herbouw" in lowered or "opstal" in lowered
-
-    def _row_state(self, element: Any) -> str:
-        marker = " ".join(
-            [
-                " ".join(element.get("class", [])) if hasattr(element, "get") else "",
-                str(element.get("style", "")) if hasattr(element, "get") else "",
-                str(element.get("data-status", "")) if hasattr(element, "get") else "",
-                element.get_text(" ", strip=True) if hasattr(element, "get_text") else "",
-            ]
-        ).lower()
-        return self._row_state_from_marker(marker)
+    def _meter_type_from_branche(self, value: str) -> str:
+        lowered = (value or "").lower()
+        if "opstal" in lowered or "herbouw" in lowered or "woonhuis" in lowered:
+            return "herbouwwaardemeter"
+        if "inboedel" in lowered:
+            return "inboedelwaardemeter"
+        return ""
 
     def _row_state_from_marker(self, marker: str) -> str:
         marker = (marker or "").lower()
@@ -377,10 +379,74 @@ class NH1816PortalService:
             return "openstaand"
         if row_state == "processed":
             return "behandeld"
-        return "onbekend"
+        raise RuntimeError("NH1816 rijstatus kon niet uit de DOM-kleur worden bepaald.")
 
     def _parse_rgb(self, value: str) -> tuple[int, int, int] | None:
         match = re.search(r"rgba?\((\d+),\s*(\d+),\s*(\d+)", value or "")
         if not match:
             return None
         return int(match.group(1)), int(match.group(2)), int(match.group(3))
+
+    def _validate_dom_row(self, item: dict[str, Any]) -> None:
+        required = {
+            "klantnaam": "Relatie / klantnaam",
+            "adres": "Adres",
+            "email": "Emailadres",
+            "branche": "Branche",
+            "polisnummer": "Polisnr.",
+            "expiry_date": "Verloopdatum / Verlengdatum",
+            "meter_type": "meter_type",
+            "status": "Status",
+        }
+        if item.get("status") == "behandeld":
+            required["handled_date"] = "Behandeld datum"
+        missing = [label for key, label in required.items() if not str(item.get(key) or "").strip()]
+        if missing:
+            raise RuntimeError(
+                "NH1816 tabelrij is niet compleet gelezen. Ontbrekende kolommen: "
+                + ", ".join(missing)
+                + f". Rij: {item.get('raw_text')}"
+            )
+
+    def _selector_debug(self, page: Any) -> dict[str, Any]:
+        return page.evaluate(
+            """
+            () => {
+                const visible = (el) => {
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+                };
+                const count = (selector) => {
+                    const elements = Array.from(document.querySelectorAll(selector));
+                    return { selector, total: elements.length, visible: elements.filter(visible).length };
+                };
+                return {
+                    url: window.location.href,
+                    title: document.title,
+                    selectors: [
+                        count('table'),
+                        count('thead'),
+                        count('tbody'),
+                        count('tr'),
+                        count('th'),
+                        count('td'),
+                        count('[role="grid"]'),
+                        count('[role="table"]'),
+                        count('[role="row"]'),
+                        count('[role="cell"]'),
+                        count('[role="gridcell"]'),
+                        count('[role="columnheader"]')
+                    ],
+                    visibleTableTexts: Array.from(document.querySelectorAll('table')).filter(visible).slice(0, 5).map((table) => table.innerText.slice(0, 1000))
+                };
+            }
+            """
+        )
+
+    def _write_selector_debug(self, page: Any, payload: dict[str, Any] | None = None) -> None:
+        selectors_path = self.debug_dir / "nh1816_selectors.json"
+        debug_payload = self._selector_debug(page)
+        if payload:
+            debug_payload["parser_payload"] = payload
+        selectors_path.write_text(json.dumps(debug_payload, ensure_ascii=False, indent=2), encoding="utf-8")

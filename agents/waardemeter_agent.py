@@ -106,7 +106,7 @@ class WaardemeterAgent(BaseAgent):
             return "herbouwwaardemeter"
         if "inboedel" in lowered:
             return "inboedelwaardemeter"
-        return "onbekend"
+        return ""
 
     def normalize_branch(self, value: str) -> str:
         lowered = self.clean_text(value).lower()
@@ -118,9 +118,9 @@ class WaardemeterAgent(BaseAgent):
 
     def normalize_row_state(self, value: str) -> str:
         lowered = self.clean_text(value).lower()
-        if "groen" in lowered or "verwerkt" in lowered or "afgerond" in lowered:
+        if "groen" in lowered or "green" in lowered or "processed" in lowered or "verwerkt" in lowered or "afgerond" in lowered:
             return "processed"
-        if "grijs" in lowered or "open" in lowered or "nieuw" in lowered or not lowered:
+        if "grijs" in lowered or "grey" in lowered or "gray" in lowered or "open" in lowered or "nieuw" in lowered or not lowered:
             return "open"
         return lowered
 
