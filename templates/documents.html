@@ -20,7 +20,15 @@
             <p class="eyebrow">DDI-indexvoorstel</p>
             <h2>Documentanalyses</h2>
         </div>
+        <div class="button-row">
+            <a class="button ghost" href="{{ url_for('documents', status='openstaand') }}"><i class="ti ti-inbox"></i>Openstaand</a>
+            <a class="button ghost" href="{{ url_for('documents', status='wacht_op_actie') }}"><i class="ti ti-alert-circle"></i>Wacht op actie</a>
+            <a class="button ghost" href="{{ url_for('documents', status='afgehandeld') }}"><i class="ti ti-circle-check"></i>Afgehandeld</a>
+            <a class="button ghost" href="{{ url_for('documents', status='gearchiveerd') }}"><i class="ti ti-archive"></i>Gearchiveerd</a>
+            <a class="button ghost" href="{{ url_for('documents', status='alles') }}"><i class="ti ti-list"></i>Alles</a>
+        </div>
     </div>
+    <p class="empty">Filter: {{ status_filter|replace('_', ' ')|capitalize }}</p>
 
     {% if documents %}
         <div class="table-wrap">
@@ -37,6 +45,7 @@
                         <th>Vertrouwen</th>
                         <th>Status</th>
                         <th>Controle</th>
+                        <th>Acties</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -52,6 +61,22 @@
                             <td>{{ "%.0f"|format((item.confidence or 0) * 100) }}%</td>
                             <td><span class="pill cyan">{{ item.status or "queued" }}</span></td>
                             <td>{{ "Ja" if item.requires_human_review else "Nee" }}</td>
+                            <td>
+                                <div class="button-row">
+                                    <form method="post" action="{{ url_for('document_mark_processed', document_id=item.id) }}">
+                                        <button type="submit"><i class="ti ti-circle-check"></i>Markeer als verwerkt</button>
+                                    </form>
+                                    <form method="post" action="{{ url_for('document_archive', document_id=item.id) }}">
+                                        <button type="submit"><i class="ti ti-archive"></i>Archiveer</button>
+                                    </form>
+                                    <form method="post" action="{{ url_for('document_retry', document_id=item.id) }}">
+                                        <button type="submit"><i class="ti ti-refresh"></i>Opnieuw analyseren</button>
+                                    </form>
+                                    <form method="post" action="{{ url_for('document_delete', document_id=item.id) }}" onsubmit="return confirm('Weet je zeker dat je dit item wilt verwijderen?');">
+                                        <button type="submit"><i class="ti ti-trash"></i>Verwijder</button>
+                                    </form>
+                                </div>
+                            </td>
                         </tr>
                     {% endfor %}
                 </tbody>

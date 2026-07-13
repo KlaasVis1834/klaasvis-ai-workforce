@@ -116,6 +116,12 @@ class Database:
                     requires_human_review INTEGER,
                     review_reason TEXT,
                     status TEXT DEFAULT 'queued',
+                    processed_at TEXT,
+                    processed_by TEXT,
+                    archived_at TEXT,
+                    archived_by TEXT,
+                    deleted_at TEXT,
+                    deleted_by TEXT,
                     ai_model TEXT,
                     ai_raw_response TEXT,
                     ai_parse_status TEXT,
@@ -185,6 +191,12 @@ class Database:
                     raw_json TEXT,
                     fetched_at TEXT,
                     processing_status TEXT DEFAULT 'nieuw',
+                    processed_at TEXT,
+                    processed_by TEXT,
+                    archived_at TEXT,
+                    archived_by TEXT,
+                    deleted_at TEXT,
+                    deleted_by TEXT,
                     proposed_action TEXT,
                     concept_email_subject TEXT,
                     concept_email_body TEXT,
@@ -301,6 +313,12 @@ class Database:
             "raw_json": "ALTER TABLE waardemeter_items ADD COLUMN raw_json TEXT",
             "fetched_at": "ALTER TABLE waardemeter_items ADD COLUMN fetched_at TEXT",
             "processing_status": "ALTER TABLE waardemeter_items ADD COLUMN processing_status TEXT DEFAULT 'nieuw'",
+            "processed_at": "ALTER TABLE waardemeter_items ADD COLUMN processed_at TEXT",
+            "processed_by": "ALTER TABLE waardemeter_items ADD COLUMN processed_by TEXT",
+            "archived_at": "ALTER TABLE waardemeter_items ADD COLUMN archived_at TEXT",
+            "archived_by": "ALTER TABLE waardemeter_items ADD COLUMN archived_by TEXT",
+            "deleted_at": "ALTER TABLE waardemeter_items ADD COLUMN deleted_at TEXT",
+            "deleted_by": "ALTER TABLE waardemeter_items ADD COLUMN deleted_by TEXT",
             "proposed_action": "ALTER TABLE waardemeter_items ADD COLUMN proposed_action TEXT",
             "concept_email_subject": "ALTER TABLE waardemeter_items ADD COLUMN concept_email_subject TEXT",
             "concept_email_body": "ALTER TABLE waardemeter_items ADD COLUMN concept_email_body TEXT",
@@ -375,6 +393,12 @@ class Database:
             "requires_human_review": "ALTER TABLE document_analyses ADD COLUMN requires_human_review INTEGER",
             "review_reason": "ALTER TABLE document_analyses ADD COLUMN review_reason TEXT",
             "status": "ALTER TABLE document_analyses ADD COLUMN status TEXT DEFAULT 'queued'",
+            "processed_at": "ALTER TABLE document_analyses ADD COLUMN processed_at TEXT",
+            "processed_by": "ALTER TABLE document_analyses ADD COLUMN processed_by TEXT",
+            "archived_at": "ALTER TABLE document_analyses ADD COLUMN archived_at TEXT",
+            "archived_by": "ALTER TABLE document_analyses ADD COLUMN archived_by TEXT",
+            "deleted_at": "ALTER TABLE document_analyses ADD COLUMN deleted_at TEXT",
+            "deleted_by": "ALTER TABLE document_analyses ADD COLUMN deleted_by TEXT",
             "ai_model": "ALTER TABLE document_analyses ADD COLUMN ai_model TEXT",
             "ai_raw_response": "ALTER TABLE document_analyses ADD COLUMN ai_raw_response TEXT",
             "ai_parse_status": "ALTER TABLE document_analyses ADD COLUMN ai_parse_status TEXT",
@@ -734,7 +758,7 @@ class Database:
                 """,
                 (
                     datetime.now().isoformat(timespec="seconds"),
-                    result.get("status", "needs_human"),
+                    self.normalize_work_status(result.get("status", "actie_nodig")),
                     result.get("extracted_text"),
                     result.get("documenttype"),
                     result.get("categorie"),
@@ -761,30 +785,175 @@ class Database:
                 ),
             )
 
-    def document_analyses(self, limit: int = 100) -> list[dict[str, Any]]:
+    def document_analyses(self, limit: int = 100, status_filter: str = "openstaand") -> list[dict[str, Any]]:
+        filter_sql, params = self.work_status_filter_sql("d.status", status_filter)
+        params.append(limit)
         with self.connect() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT d.*, m.subject AS mail_subject, m.sender AS mail_sender, m.received_at AS mail_received_at
                 FROM document_analyses d
                 LEFT JOIN mail_analyses m ON m.id = d.mail_analysis_id
+                {filter_sql}
                 ORDER BY d.id DESC
                 LIMIT ?
                 """,
-                (limit,),
+                tuple(params),
             ).fetchall()
         return [dict(row) for row in rows]
 
     def document_stats(self) -> dict[str, Any]:
         with self.connect() as connection:
-            total = connection.execute("SELECT COUNT(*) FROM document_analyses").fetchone()[0]
+            total = connection.execute(
+                "SELECT COUNT(*) FROM document_analyses WHERE status IN ('nieuw', 'queued', 'analyzing', 'wacht_op_akkoord', 'actie_nodig', 'fout', 'needs_human', 'analyzed')"
+            ).fetchone()[0]
             queued = connection.execute(
                 "SELECT COUNT(*) FROM document_analyses WHERE status = 'queued'"
             ).fetchone()[0]
             needs_human = connection.execute(
-                "SELECT COUNT(*) FROM document_analyses WHERE requires_human_review = 1"
+                "SELECT COUNT(*) FROM document_analyses WHERE requires_human_review = 1 AND status IN ('nieuw', 'queued', 'analyzing', 'wacht_op_akkoord', 'actie_nodig', 'fout', 'needs_human', 'analyzed')"
             ).fetchone()[0]
         return {"total": total, "queued": queued, "needs_human": needs_human}
+
+    def normalize_work_status(self, status: str | None) -> str:
+        value = (status or "").strip()
+        if value in {"analyzed", "needs_human", "routed", "completed"}:
+            return "actie_nodig"
+        if value in {"error", "failed", "ai_timeout"}:
+            return "fout"
+        return value or "actie_nodig"
+
+    def work_status_filter_sql(self, column: str, status_filter: str) -> tuple[str, list[Any]]:
+        active = (
+            "nieuw",
+            "queued",
+            "analyzing",
+            "wacht_op_akkoord",
+            "actie_nodig",
+            "fout",
+            "needs_human",
+            "analyzed",
+            "nieuw_verzoek",
+            "handmatig_verwerken_nodig",
+        )
+        handled = ("verwerkt", "afgerond", "verwerkt_in_nh1816")
+        archived = ("gearchiveerd",)
+        if status_filter == "wacht_op_actie":
+            return f"WHERE {column} IN (?, ?, ?, ?)", ["wacht_op_akkoord", "actie_nodig", "fout", "handmatig_verwerken_nodig"]
+        if status_filter == "afgehandeld":
+            return f"WHERE {column} IN (?, ?, ?)", list(handled)
+        if status_filter == "gearchiveerd":
+            return f"WHERE {column} IN (?)", list(archived)
+        if status_filter == "alles":
+            return "WHERE COALESCE(deleted_at, '') = ''", []
+        return f"WHERE {column} IN ({', '.join('?' for _ in active)})", list(active)
+
+    def mark_document_work_status(self, document_id: int, status: str, user: str, reason: str | None = None) -> None:
+        self._mark_work_status(
+            table="document_analyses",
+            id_column="id",
+            record_id=document_id,
+            status=status,
+            user=user,
+            reason=reason,
+            log_callback=self.log_document,
+            item_type="document",
+            status_column="status",
+        )
+
+    def retry_document_analysis(self, document_id: int, user: str) -> None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT status FROM document_analyses WHERE id = ?",
+                (document_id,),
+            ).fetchone()
+            old_status = row["status"] if row else ""
+            now = datetime.now().isoformat(timespec="seconds")
+            connection.execute(
+                """
+                UPDATE document_analyses
+                SET status = 'queued',
+                    updated_at = ?,
+                    processed_at = NULL,
+                    processed_by = NULL,
+                    archived_at = NULL,
+                    archived_by = NULL,
+                    deleted_at = NULL,
+                    deleted_by = NULL
+                WHERE id = ?
+                """,
+                (now, document_id),
+            )
+        self.log_document(
+            document_id,
+            "INFO",
+            "Document opnieuw in analysequeue gezet",
+            f"type=document; id={document_id}; old={old_status}; new=queued; user={user}; at={now}",
+        )
+
+    def hard_delete_document(self, document_id: int, user: str) -> None:
+        now = datetime.now().isoformat(timespec="seconds")
+        self.log_document(
+            document_id,
+            "WARNING",
+            "Document definitief verwijderd",
+            f"type=document; id={document_id}; user={user}; at={now}",
+        )
+        with self.connect() as connection:
+            connection.execute("DELETE FROM document_analyses WHERE id = ?", (document_id,))
+
+    def _mark_work_status(
+        self,
+        table: str,
+        id_column: str,
+        record_id: int,
+        status: str,
+        user: str,
+        reason: str | None,
+        log_callback: Any,
+        item_type: str,
+        status_column: str = "status",
+    ) -> None:
+        now = datetime.now().isoformat(timespec="seconds")
+        timestamp_column = None
+        user_column = None
+        if status == "verwerkt":
+            timestamp_column = "processed_at"
+            user_column = "processed_by"
+        elif status == "gearchiveerd":
+            timestamp_column = "archived_at"
+            user_column = "archived_by"
+        elif status == "verwijderd":
+            timestamp_column = "deleted_at"
+            user_column = "deleted_by"
+
+        with self.connect() as connection:
+            row = connection.execute(
+                f"SELECT {status_column} AS status FROM {table} WHERE {id_column} = ?",
+                (record_id,),
+            ).fetchone()
+            old_status = row["status"] if row else ""
+            assignments = [f"{status_column} = ?", "updated_at = ?"]
+            params: list[Any] = [status, now]
+            if timestamp_column and user_column:
+                assignments.extend([f"{timestamp_column} = ?", f"{user_column} = ?"])
+                params.extend([now, user])
+            params.append(record_id)
+            connection.execute(
+                f"UPDATE {table} SET {', '.join(assignments)} WHERE {id_column} = ?",
+                tuple(params),
+            )
+        detail_parts = [
+            f"type={item_type}",
+            f"id={record_id}",
+            f"old={old_status}",
+            f"new={status}",
+            f"user={user}",
+            f"at={now}",
+        ]
+        if reason:
+            detail_parts.append(f"reason={reason}")
+        log_callback(record_id, "INFO", "Werkvoorraadstatus gewijzigd", "; ".join(detail_parts))
 
     def log_document(
         self,
@@ -908,7 +1077,7 @@ class Database:
                         "UPDATE waardemeter_items SET task_id = ? WHERE id = ?",
                         (int(task_cursor.lastrowid), waardemeter_id),
                     )
-                elif item.get("processing_status") == "verwerkt_in_nh1816" and existing["task_id"]:
+                elif item.get("processing_status") in {"verwerkt", "verwerkt_in_nh1816"} and existing["task_id"]:
                     connection.execute(
                         """
                         UPDATE ai_tasks
@@ -1021,14 +1190,12 @@ class Database:
             return int(cursor.lastrowid)
 
     def waardemeters(self, limit: int = 200, status_filter: str = "openstaand") -> list[dict[str, Any]]:
-        filter_sql = ""
-        params: list[Any] = []
+        if status_filter == "behandeld":
+            status_filter = "afgehandeld"
+        filter_sql, params = self.work_status_filter_sql("w.processing_status", status_filter)
         if status_filter == "openstaand":
-            filter_sql = "WHERE w.status = ?"
-            params.append("openstaand")
-        elif status_filter == "behandeld":
-            filter_sql = "WHERE w.status = ?"
-            params.append("verwerkt")
+            filter_sql = "WHERE w.status = ? AND w.processing_status IN ('nieuw_verzoek', 'nieuw', 'queued', 'wacht_op_akkoord', 'actie_nodig', 'fout')"
+            params = ["openstaand"]
         params.append(limit)
         with self.connect() as connection:
             rows = connection.execute(
@@ -1049,6 +1216,12 @@ class Database:
                        row_css_class,
                        background_color,
                        processing_status AS status,
+                       processed_at,
+                       processed_by,
+                       archived_at,
+                       archived_by,
+                       deleted_at,
+                       deleted_by,
                        raw_text,
                        raw_json,
                        fetched_at,
@@ -1095,6 +1268,12 @@ class Database:
                        row_css_class,
                        background_color,
                        processing_status AS status,
+                       processed_at,
+                       processed_by,
+                       archived_at,
+                       archived_by,
+                       deleted_at,
+                       deleted_by,
                        raw_text,
                        raw_json,
                        fetched_at,
@@ -1131,19 +1310,43 @@ class Database:
             )
         self.log_waardemeter(waardemeter_id, "INFO", message, status)
 
+    def mark_waardemeter_work_status(self, waardemeter_id: int, status: str, user: str, reason: str | None = None) -> None:
+        self._mark_work_status(
+            table="waardemeter_items",
+            id_column="id",
+            record_id=waardemeter_id,
+            status=status,
+            user=user,
+            reason=reason,
+            log_callback=self.log_waardemeter,
+            item_type="waardemeter",
+            status_column="processing_status",
+        )
+
+    def hard_delete_waardemeter(self, waardemeter_id: int, user: str) -> None:
+        now = datetime.now().isoformat(timespec="seconds")
+        self.log_waardemeter(
+            waardemeter_id,
+            "WARNING",
+            "Waardemeter definitief verwijderd",
+            f"type=waardemeter; id={waardemeter_id}; user={user}; at={now}",
+        )
+        with self.connect() as connection:
+            connection.execute("DELETE FROM waardemeter_items WHERE id = ?", (waardemeter_id,))
+
     def waardemeter_stats(self) -> dict[str, Any]:
         with self.connect() as connection:
             open_total = connection.execute(
                 """
                 SELECT COUNT(*) FROM waardemeter_items
-                WHERE processing_status NOT IN ('verwerkt_in_nh1816', 'fout')
+                WHERE processing_status IN ('nieuw', 'queued', 'analyzing', 'wacht_op_akkoord', 'actie_nodig', 'fout', 'nieuw_verzoek', 'handmatig_verwerken_nodig')
                 """
             ).fetchone()[0]
             waiting = connection.execute(
                 "SELECT COUNT(*) FROM waardemeter_items WHERE processing_status IN ('wacht_op_akkoord', 'nieuw_verzoek')"
             ).fetchone()[0]
             completed = connection.execute(
-                "SELECT COUNT(*) FROM waardemeter_items WHERE processing_status = 'verwerkt_in_nh1816'"
+                "SELECT COUNT(*) FROM waardemeter_items WHERE processing_status IN ('verwerkt', 'afgerond', 'verwerkt_in_nh1816')"
             ).fetchone()[0]
             manual_nh1816 = connection.execute(
                 "SELECT COUNT(*) FROM waardemeter_items WHERE processing_status = 'handmatig_verwerken_nodig'"

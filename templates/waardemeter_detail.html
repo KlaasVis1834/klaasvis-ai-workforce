@@ -54,6 +54,15 @@
                     <button type="submit"><i class="ti ti-circle-check"></i>Markeer NH1816 verwerkt</button>
                 </form>
             {% endif %}
+            <form method="post" action="{{ url_for('waardemeter_mark_processed', waardemeter_id=item.id) }}">
+                <button type="submit"><i class="ti ti-circle-check"></i>Markeer als verwerkt</button>
+            </form>
+            <form method="post" action="{{ url_for('waardemeter_archive', waardemeter_id=item.id) }}">
+                <button type="submit"><i class="ti ti-archive"></i>Archiveer</button>
+            </form>
+            <form method="post" action="{{ url_for('waardemeter_delete', waardemeter_id=item.id) }}" onsubmit="return confirm('Weet je zeker dat je dit item wilt verwijderen?');">
+                <button type="submit"><i class="ti ti-trash"></i>Verwijder</button>
+            </form>
         </div>
         <p class="empty">Deze knoppen registreren alleen interne status. Er wordt niets automatisch in ANVA of NH1816 verwerkt.</p>
     </article>

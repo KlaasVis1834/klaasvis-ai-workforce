@@ -128,7 +128,7 @@ class WaardemeterAgent(BaseAgent):
 
     def processing_status(self, item: dict[str, Any]) -> str:
         if item.get("row_state") == "processed" or item.get("portal_status") == "verwerkt":
-            return "verwerkt_in_nh1816"
+            return "verwerkt"
         return "nieuw_verzoek"
 
     def task_payload(self, item: dict[str, Any]) -> dict[str, Any]:

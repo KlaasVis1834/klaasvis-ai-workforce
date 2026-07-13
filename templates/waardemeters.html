@@ -52,13 +52,15 @@
             <h2>Grijze werkvoorraad en historie</h2>
         </div>
         <div class="button-row">
-            <a class="button ghost" href="{{ url_for('waardemeters', status='openstaand') }}"><i class="ti ti-filter"></i>Openstaand</a>
-            <a class="button ghost" href="{{ url_for('waardemeters', status='behandeld') }}"><i class="ti ti-history"></i>Behandeld</a>
+            <a class="button ghost" href="{{ url_for('waardemeters', status='openstaand') }}"><i class="ti ti-inbox"></i>Openstaand</a>
+            <a class="button ghost" href="{{ url_for('waardemeters', status='wacht_op_actie') }}"><i class="ti ti-alert-circle"></i>Wacht op actie</a>
+            <a class="button ghost" href="{{ url_for('waardemeters', status='afgehandeld') }}"><i class="ti ti-circle-check"></i>Afgehandeld</a>
+            <a class="button ghost" href="{{ url_for('waardemeters', status='gearchiveerd') }}"><i class="ti ti-archive"></i>Gearchiveerd</a>
             <a class="button ghost" href="{{ url_for('waardemeters', status='alles') }}"><i class="ti ti-list"></i>Alles</a>
             <a class="text-link" href="{{ url_for('waardemeters_import') }}">Nieuwe import</a>
         </div>
     </div>
-    <p class="empty">Filter: {{ status_filter|capitalize }}</p>
+    <p class="empty">Filter: {{ status_filter|replace('_', ' ')|capitalize }}</p>
 
     {% if waardemeters %}
         <div class="table-wrap">
@@ -123,6 +125,20 @@
                                         <form method="post" action="{{ url_for('waardemeter_mark_nh1816_done', waardemeter_id=item.id) }}">
                                             <button type="submit"><i class="ti ti-circle-check"></i>Markeer NH1816 verwerkt</button>
                                         </form>
+                                    {% endif %}
+                                    <form method="post" action="{{ url_for('waardemeter_mark_processed', waardemeter_id=item.id) }}">
+                                        <button type="submit"><i class="ti ti-circle-check"></i>Markeer als verwerkt</button>
+                                    </form>
+                                    <form method="post" action="{{ url_for('waardemeter_archive', waardemeter_id=item.id) }}">
+                                        <button type="submit"><i class="ti ti-archive"></i>Archiveer</button>
+                                    </form>
+                                    <form method="post" action="{{ url_for('waardemeter_delete', waardemeter_id=item.id) }}" onsubmit="return confirm('Weet je zeker dat je dit item wilt verwijderen?');">
+                                        <button type="submit"><i class="ti ti-trash"></i>Verwijder</button>
+                                    </form>
+                                    {% if nh1816_config.value_meters_url %}
+                                        <a class="button ghost" href="{{ nh1816_config.value_meters_url }}" target="_blank" rel="noopener">
+                                            <i class="ti ti-external-link"></i>Open in NH1816
+                                        </a>
                                     {% endif %}
                                 </div>
                             </td>

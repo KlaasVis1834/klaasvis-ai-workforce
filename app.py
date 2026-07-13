@@ -397,6 +397,14 @@ def nh1816_config_status() -> dict[str, Any]:
     }
 
 
+def current_operator() -> str:
+    return os.getenv("USERNAME") or os.getenv("USER") or "lokale_gebruiker"
+
+
+def hard_delete_allowed() -> bool:
+    return os.getenv("ENABLE_ADMIN_HARD_DELETE", "false").strip().lower() == "true"
+
+
 def normalize_header(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (value or "").strip().lower())
 
@@ -597,11 +605,51 @@ def agents():
 
 @app.route("/documents")
 def documents():
+    status_filter = request.args.get("status", "openstaand")
     return render_template(
         "documents.html",
-        documents=database.document_analyses(100),
+        documents=database.document_analyses(100, status_filter=status_filter),
         document_stats=database.document_stats(),
+        status_filter=status_filter,
     )
+
+
+@app.route("/documents/<int:document_id>/mark-processed", methods=["POST"])
+def document_mark_processed(document_id: int):
+    database.mark_document_work_status(document_id, "verwerkt", current_operator(), "Handmatig gemarkeerd als verwerkt")
+    flash("Document gemarkeerd als verwerkt.", "success")
+    return redirect(url_for("documents"))
+
+
+@app.route("/documents/<int:document_id>/archive", methods=["POST"])
+def document_archive(document_id: int):
+    database.mark_document_work_status(document_id, "gearchiveerd", current_operator(), "Handmatig gearchiveerd")
+    flash("Document gearchiveerd.", "success")
+    return redirect(url_for("documents"))
+
+
+@app.route("/documents/<int:document_id>/delete", methods=["POST"])
+def document_delete(document_id: int):
+    database.mark_document_work_status(document_id, "verwijderd", current_operator(), "Soft delete via dashboard")
+    flash("Document verwijderd uit de standaardweergave.", "success")
+    return redirect(url_for("documents"))
+
+
+@app.route("/documents/<int:document_id>/retry", methods=["POST"])
+def document_retry(document_id: int):
+    database.retry_document_analysis(document_id, current_operator())
+    flash("Document opnieuw in de analysequeue gezet.", "success")
+    return redirect(url_for("documents"))
+
+
+@app.route("/admin/documents/<int:document_id>/hard-delete", methods=["POST"])
+def document_hard_delete(document_id: int):
+    if not hard_delete_allowed() or request.form.get("confirm") != "DEFINITIEF":
+        flash("Definitief verwijderen is alleen beschikbaar voor beheerder met expliciete bevestiging.", "error")
+        return redirect(url_for("documents"))
+    database.hard_delete_document(document_id, current_operator())
+    flash("Document definitief verwijderd.", "success")
+    return redirect(url_for("documents", status="alles"))
 
 
 @app.route("/waardemeters")
@@ -713,14 +761,41 @@ def waardemeter_mark_nh1816_done(waardemeter_id: int):
     if not item:
         flash("Waardemeter item niet gevonden.", "error")
         return redirect(url_for("waardemeters"))
-    database.update_waardemeter_status(
-        waardemeter_id,
-        "verwerkt_in_nh1816",
-        "NH1816 handmatig verwerkt",
-    )
+    database.mark_waardemeter_work_status(waardemeter_id, "verwerkt", current_operator(), "NH1816 handmatig verwerkt")
     database.log("Waardemeter Agent", "INFO", "NH1816 handmatig verwerkt", item.get("policy_number"))
     flash("Waardemeter gemarkeerd als verwerkt in NH1816.", "success")
     return redirect(url_for("waardemeters"))
+
+
+@app.route("/waardemeters/<int:waardemeter_id>/mark-processed", methods=["POST"])
+def waardemeter_mark_processed(waardemeter_id: int):
+    database.mark_waardemeter_work_status(waardemeter_id, "verwerkt", current_operator(), "Handmatig gemarkeerd als verwerkt")
+    flash("Waardemeter gemarkeerd als verwerkt.", "success")
+    return redirect(url_for("waardemeters"))
+
+
+@app.route("/waardemeters/<int:waardemeter_id>/archive", methods=["POST"])
+def waardemeter_archive(waardemeter_id: int):
+    database.mark_waardemeter_work_status(waardemeter_id, "gearchiveerd", current_operator(), "Handmatig gearchiveerd")
+    flash("Waardemeter gearchiveerd.", "success")
+    return redirect(url_for("waardemeters"))
+
+
+@app.route("/waardemeters/<int:waardemeter_id>/delete", methods=["POST"])
+def waardemeter_delete(waardemeter_id: int):
+    database.mark_waardemeter_work_status(waardemeter_id, "verwijderd", current_operator(), "Soft delete via dashboard")
+    flash("Waardemeter verwijderd uit de standaardweergave.", "success")
+    return redirect(url_for("waardemeters"))
+
+
+@app.route("/admin/waardemeters/<int:waardemeter_id>/hard-delete", methods=["POST"])
+def waardemeter_hard_delete(waardemeter_id: int):
+    if not hard_delete_allowed() or request.form.get("confirm") != "DEFINITIEF":
+        flash("Definitief verwijderen is alleen beschikbaar voor beheerder met expliciete bevestiging.", "error")
+        return redirect(url_for("waardemeters"))
+    database.hard_delete_waardemeter(waardemeter_id, current_operator())
+    flash("Waardemeter definitief verwijderd.", "success")
+    return redirect(url_for("waardemeters", status="alles"))
 
 
 @app.route("/mail-analyses")
